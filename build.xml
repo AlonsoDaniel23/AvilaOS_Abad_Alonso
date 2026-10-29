@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project name="AvilaOS" default="default" basedir=".">
+
+    <target name="clean">
+        <delete dir="build"/>
+        <delete dir="dist"/>
+    </target>
+
+    <target name="compile">
+        <mkdir dir="build/classes"/>
+        <javac srcdir="src" destdir="build/classes" includeantruntime="false"/>
+    </target>
+
+    <target name="jar" depends="compile">
+        <mkdir dir="dist"/>
+        <jar destfile="dist/AvilaOS.jar" basedir="build/classes"/>
+    </target>
+
+    <target name="rebuild" depends="clean,jar"/>
+    <target name="default" depends="rebuild"/>
+
+</project>

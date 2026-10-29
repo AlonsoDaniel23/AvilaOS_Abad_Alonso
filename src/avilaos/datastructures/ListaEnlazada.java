@@ -34,6 +34,22 @@ public class ListaEnlazada {
         }
         tamaño++;
     }
+    
+    /**
+     * Obtiene el objeto almacenado en un índice específico de la lista.
+     * @param indice Posición del elemento a recuperar (0 a tamaño - 1).
+     * @return El objeto en dicha posición o null si el índice es inválido.
+     */
+    public Object obtener(int indice) {
+        if (indice < 0 || indice >= tamaño) {
+            return null;
+        }
+        Nodo actual = cabeza;
+        for (int i = 0; i < indice; i++) {
+            actual = actual.getSiguiente();
+        }
+        return (actual != null) ? actual.getDato() : null;
+    }
 
     /**
      * Verifica si la lista está vacía.
