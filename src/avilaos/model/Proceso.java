@@ -5,10 +5,10 @@ import avilaos.enums.EstadoProceso;
 /**
  * Clase que representa un Proceso dentro del sistema operativo.
  * Almacena la informacion del Bloque de Control de Procesos (PCB),
- * jerarquia, estado de Stallings y Tabla de Paginas para Memoria Virtual.
+ * jerarquia, estado de Stallings, deadline y Tabla de Paginas para Memoria Virtual.
  * 
  * @author Equipo AvilaOS
- * @version 1.1
+ * @version 1.2
  */
 public class Proceso {
     
@@ -17,6 +17,7 @@ public class Proceso {
     private String nombre;
     private EstadoProceso estado;
     private int prioridad;
+    private int deadline; // Agregado para soporte del algoritmo EDF
     private int tiempoCpuConsumido;
     private int tiempoEjecucion; // Tiempo total requerido en CPU
     private EntradaTablaPaginas[] tablaPaginas;
@@ -37,6 +38,7 @@ public class Proceso {
         this.nombre = nombre;
         this.estado = EstadoProceso.NUEVO;
         this.prioridad = prioridad;
+        this.deadline = 0; // Valor por defecto
         this.tiempoCpuConsumido = 0;
         this.tiempoEjecucion = tiempoEjecucion;
 
@@ -89,6 +91,14 @@ public class Proceso {
 
     public void setPrioridad(int prioridad) {
         this.prioridad = prioridad;
+    }
+
+    public int getDeadline() {
+        return deadline;
+    }
+
+    public void setDeadline(int deadline) {
+        this.deadline = deadline;
     }
 
     public int getTiempoCpuConsumido() {
