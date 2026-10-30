@@ -54,6 +54,25 @@ public class ColaProcesos {
     }
 
     /**
+     * Obtiene el elemento en una posición específica de la cola sin desencolarlo.
+     * @param indice Posición de base 0 del elemento.
+     * @return El dato en esa posición o null si el índice está fuera de rango.
+     */
+    public Object obtener(int indice) {
+        if (indice < 0 || indice >= tamaño || estaVacia()) {
+            return null;
+        }
+        Nodo actual = frente;
+        for (int i = 0; i < indice; i++) {
+            if (actual == null) {
+                return null;
+            }
+            actual = actual.getSiguiente();
+        }
+        return (actual != null) ? actual.getDato() : null;
+    }
+
+    /**
      * Verifica si la cola está vacía.
      * @return true si no hay elementos, false en caso contrario.
      */

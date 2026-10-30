@@ -1,20 +1,20 @@
-/*
- * Click nbfs://nbhost/SystemFileSystem/Templates/Licenses/license-default.txt to change this license
- * Click nbfs://nbhost/SystemFileSystem/Templates/Classes/Main.java to edit this template
- */
 package avilaos;
 
+import avilaos.gui.Vista1Configuracion;
+import javax.swing.SwingUtilities;
+
 /**
- *
- * @author Daniel Alonso
+ * Punto de entrada principal para pruebas de integracion de AvilaOS.
+ * 
+ * @author Equipo AvilaOS
  */
 public class Main {
 
-    /**
-     * @param args the command line arguments
-     */
     public static void main(String[] args) {
-        // TODO code application logic here
+        // Lanzar la interfaz gráfica de configuración e inserción
+        SwingUtilities.invokeLater(() -> {
+            Vista1Configuracion vista1 = new Vista1Configuracion();
+            vista1.setVisible(true);
+        });
     }
-    
 }

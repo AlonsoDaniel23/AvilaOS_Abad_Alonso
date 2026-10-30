@@ -20,6 +20,12 @@ public class MetricasService {
     private int elementosProducidosTotales;
     private int elementosConsumidosTotales;
 
+    // Matriz de historial de uso de CPU: [idNodo][ciclo] = porcentajeUso (0 a 100)
+    private static final int MAX_NODOS = 10;
+    private static final int MAX_CICLOS = 2000;
+    private final double[][] historialCpuNodos;
+    private int maxCicloRegistrado;
+
     public MetricasService() {
         this.procesosCompletadosTotales = 0;
         this.deadlinesIncumplidosTotales = 0;
@@ -27,13 +33,10 @@ public class MetricasService {
         this.acumuladoTiempoRespuesta = 0;
         this.elementosProducidosTotales = 0;
         this.elementosConsumidosTotales = 0;
+        this.historialCpuNodos = new double[MAX_NODOS][MAX_CICLOS];
+        this.maxCicloRegistrado = 0;
     }
 
-    /**
-     * Registra las estadisticas finales de un proceso culminado.
-     * @param tiempoRespuesta Tiempo de respuesta acumulado.
-     * @param cumplioDeadline Indica si el proceso finalizo dentro de su tiempo limite.
-     */
     public synchronized void registrarProcesoTerminado(int tiempoRespuesta, boolean cumplioDeadline) {
         this.procesosCompletadosTotales++;
         this.acumuladoTiempoRespuesta += tiempoRespuesta;
@@ -53,52 +56,53 @@ public class MetricasService {
     }
 
     /**
-     * Tasa de procesos completados por ciclo de reloj (Throughput global).
-     * @param cicloActual Numero de ciclo actual emitido por el reloj.
-     * @return El valor del throughput procesado.
+     * Registra el uso instantáneo de la CPU de un nodo en un ciclo específico.
      */
+    public synchronized void registrarUsoCpuNodo(int idNodo, int ciclo, double porcentajeUso) {
+        if (idNodo >= 1 && idNodo < MAX_NODOS && ciclo >= 0 && ciclo < MAX_CICLOS) {
+            historialCpuNodos[idNodo][ciclo] = porcentajeUso;
+            if (ciclo > maxCicloRegistrado) {
+                maxCicloRegistrado = ciclo;
+            }
+        }
+    }
+
+    /**
+     * Obtiene el historial de utilización de CPU de un nodo particular.
+     */
+    public synchronized double[] getHistorialCpuNodo(int idNodo) {
+        if (idNodo < 1 || idNodo >= MAX_NODOS) {
+            return new double[0];
+        }
+        int tamanio = maxCicloRegistrado + 1;
+        double[] copia = new double[tamanio];
+        for (int c = 0; c < tamanio; c++) {
+            copia[c] = historialCpuNodos[idNodo][c];
+        }
+        return copia;
+    }
+
     public double calcularThroughput(int cicloActual) {
         if (cicloActual <= 0) return 0.0;
         return (double) procesosCompletadosTotales / cicloActual;
     }
 
-    /**
-     * Porcentaje de cumplimiento de deadlines (0-100%).
-     * @return El porcentaje de cumplimiento de tiempos limite.
-     */
     public double calcularTasaCumplimientoDeadlines() {
         int total = deadlinesCumplidosTotales + deadlinesIncumplidosTotales;
         if (total == 0) return 100.0;
         return ((double) deadlinesCumplidosTotales / total) * 100.0;
     }
 
-    /**
-     * Tiempo promedio de respuesta de los procesos en ciclos de reloj.
-     * @return El tiempo promedio de respuesta calculado en ciclos.
-     */
     public double calcularTiempoRespuestaPromedio() {
         if (procesosCompletadosTotales == 0) return 0.0;
         return (double) acumuladoTiempoRespuesta / procesosCompletadosTotales;
     }
 
     // Getters
-    public int getProcesosCompletadosTotales() {
-        return procesosCompletadosTotales;
-    }
-
-    public int getDeadlinesIncumplidosTotales() {
-        return deadlinesIncumplidosTotales;
-    }
-
-    public int getDeadlinesCumplidosTotales() {
-        return deadlinesCumplidosTotales;
-    }
-
-    public int getElementosProducidosTotales() {
-        return elementosProducidosTotales;
-    }
-
-    public int getElementosConsumidosTotales() {
-        return elementosConsumidosTotales;
-    }
+    public int getProcesosCompletadosTotales() { return procesosCompletadosTotales; }
+    public int getDeadlinesIncumplidosTotales() { return deadlinesIncumplidosTotales; }
+    public int getDeadlinesCumplidosTotales() { return deadlinesCumplidosTotales; }
+    public int getElementosProducidosTotales() { return elementosProducidosTotales; }
+    public int getElementosConsumidosTotales() { return elementosConsumidosTotales; }
+    public int getMaxCicloRegistrado() { return maxCicloRegistrado; }
 }

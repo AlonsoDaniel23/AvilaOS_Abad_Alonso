@@ -4,6 +4,9 @@
  */
 package avilaos.model;
 
+import avilaos.datastructures.ListaEnlazada;
+import avilaos.synchronization.BufferCircular;
+
 /**
  * Administra la red de nodos de computo (cluster) del simulador.
  * Controla el arreglo de objetos Computador y proporciona metodos para
@@ -13,19 +16,46 @@ package avilaos.model;
  */
 public class ClusterManager {
     
+   private static ClusterManager instancia;
     private final Computador[] computadores;
     private int cantidadActual;
+    private final ListaEnlazada listaBuffers;
+    private int latenciaRed; // <--- Parámetro configurable de latencia en ciclos de reloj
 
     public ClusterManager(int capacidadMaxima) {
         this.computadores = new Computador[capacidadMaxima];
         this.cantidadActual = 0;
+        this.listaBuffers = new ListaEnlazada();
+        this.latenciaRed = 2; // 2 ciclos de latencia de red por defecto
+        instancia = this;
     }
 
-    /**
-     * Agrega un nuevo nodo Computador al cluster.
-     * @param computador Instancia del nodo a registrar.
-     * @return true si se agrego con exito, false si el cluster esta lleno.
-     */
+    public static synchronized ClusterManager getInstancia() {
+        if (instancia == null) {
+            instancia = new ClusterManager(4);
+        }
+        return instancia;
+    }
+
+    public void registrarBuffer(BufferCircular buffer) {
+        if (buffer != null) {
+            this.listaBuffers.insertarFinal(buffer);
+        }
+    }
+
+    public BufferCircular buscarBuffer(String nombreBuffer) {
+        if (nombreBuffer == null || listaBuffers == null) {
+            return null;
+        }
+        for (int i = 0; i < listaBuffers.getTamaño(); i++) {
+            BufferCircular b = (BufferCircular) listaBuffers.obtener(i);
+            if (b != null && nombreBuffer.equalsIgnoreCase(b.getNombre())) {
+                return b;
+            }
+        }
+        return null;
+    }
+
     public boolean agregarComputador(Computador computador) {
         if (computador != null && cantidadActual < computadores.length) {
             computadores[cantidadActual] = computador;
@@ -35,11 +65,6 @@ public class ClusterManager {
         return false;
     }
 
-    /**
-     * Selecciona el nodo con menor cantidad de procesos en cola
-     * para implementar una estrategia basica de balanceo de carga.
-     * @return El Computador menos cargado o null si no hay nodos.
-     */
     public Computador obtenerNodoMenosCargado() {
         if (cantidadActual == 0) {
             return null;
@@ -58,11 +83,6 @@ public class ClusterManager {
         return menosCargado;
     }
 
-    /**
-     * Busca un nodo por su identificador unico.
-     * @param idComputador ID del nodo a buscar.
-     * @return El objeto Computador coincidente o null si no existe.
-     */
     public Computador buscarPorId(int idComputador) {
         for (int i = 0; i < cantidadActual; i++) {
             if (computadores[i].getIdComputador() == idComputador) {
@@ -72,16 +92,11 @@ public class ClusterManager {
         return null;
     }
 
-    // Getters
-    public Computador[] getComputadores() {
-        return computadores;
-    }
-
-    public int getCantidadActual() {
-        return cantidadActual;
-    }
-
-    public int getCapacidadMaxima() {
-        return computadores.length;
-    }
+    // Getters y Setters
+    public Computador[] getComputadores() { return computadores; }
+    public int getCantidadActual() { return cantidadActual; }
+    public int getCapacidadMaxima() { return computadores.length; }
+    public ListaEnlazada getListaBuffers() { return listaBuffers; }
+    public int getLatenciaRed() { return latenciaRed; }
+    public void setLatenciaRed(int latenciaRed) { this.latenciaRed = latenciaRed; }
 }

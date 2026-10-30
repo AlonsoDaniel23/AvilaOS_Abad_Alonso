@@ -29,8 +29,29 @@ public class MemoriaRAM {
     }
 
     /**
+     * Asigna una cantidad de marcos libres de RAM a un proceso.
+     * @param idProceso ID del proceso.
+     * @param cantidadMarcos Número de marcos a reservar.
+     * @return true si se completó la asignación, false si no había espacio suficiente.
+     */
+    public boolean asignarMemoriaProceso(int idProceso, int cantidadMarcos) {
+        if (getMarcosLibres() < cantidadMarcos) {
+            return false;
+        }
+
+        int asignados = 0;
+        for (int i = 0; i < marcos.length && asignados < cantidadMarcos; i++) {
+            if (!marcos[i].isOcupado()) {
+                marcos[i].ocupar(idProceso, asignados);
+                asignados++;
+            }
+        }
+        return true;
+    }
+
+    /**
      * Retorna la cantidad de marcos desocupados.
-     * @return Numero de marcos libres.
+     * @return Número de marcos libres.
      */
     public int getMarcosLibres() {
         int libres = 0;
@@ -56,7 +77,7 @@ public class MemoriaRAM {
 
     /**
      * Calcula el porcentaje actual de memoria utilizada.
-     * @return Porcentaje de uso (0.0 a 100.0) para la interfaz grafica.
+     * @return Porcentaje de uso (0.0 a 100.0) para la interfaz gráfica.
      */
     public double getPorcentajeUso() {
         int ocupados = marcos.length - getMarcosLibres();

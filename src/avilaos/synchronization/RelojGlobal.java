@@ -14,6 +14,8 @@ import avilaos.interfaces.IRelojListener;
  */
 public class RelojGlobal implements Runnable {
 
+    private static RelojGlobal instancia;
+
     private int cicloActual;
     private int duracionCicloMs;
     private volatile boolean enEjecucion;
@@ -28,6 +30,17 @@ public class RelojGlobal implements Runnable {
         this.enEjecucion = false;
         this.pausado = false;
         this.suscriptores = new ListaEnlazada();
+        instancia = this; // Guarda la referencia global al instanciar
+    }
+
+    /**
+     * Acceso Singleton a la instancia única del RelojGlobal.
+     */
+    public static synchronized RelojGlobal getInstancia() {
+        if (instancia == null) {
+            instancia = new RelojGlobal(1000); // 1000 ms por defecto
+        }
+        return instancia;
     }
 
     public synchronized void registrarSuscriptor(IRelojListener suscriptor) {
