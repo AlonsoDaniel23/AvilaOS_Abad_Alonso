@@ -390,7 +390,16 @@ public class Vista1Configuracion extends JFrame {
 
     private void accionIniciarSimulacion(ActionEvent e) {
         if (e == null) return;
-        JOptionPane.showMessageDialog(this, "Configuración lista. Procediendo al Panel de Monitoreo (Vista 2)...", "ÁvilaOS", JOptionPane.INFORMATION_MESSAGE);
+        
+        // Registrar evento de inicio de transicion
+        eventLog.registrar(0, "Configuración completada. Transicionando a la Vista de Monitoreo.");
+        
+        // Crear e instanciar la Vista 2 pasando los modulos reales construidos en la Vista 1
+        Vista2Monitoreo vista2 = new Vista2Monitoreo(this.clusterManager, this.eventLog, this.metricasService);
+        vista2.setVisible(true);
+        
+        // Cerrar la Vista 1 de Configuracion
+        this.dispose();
     }
 
     // Getters
