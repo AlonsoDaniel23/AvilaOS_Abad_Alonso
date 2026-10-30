@@ -6,6 +6,7 @@ package avilaos.gui;
 
 import avilaos.model.ClusterManager;
 import avilaos.model.Computador;
+import avilaos.model.Proceso;
 import avilaos.persistence.GestorPersistencia;
 import avilaos.services.EventLog;
 import avilaos.services.MetricasService;
@@ -24,7 +25,7 @@ import java.awt.event.ActionEvent;
  */
 public class Vista1Configuracion extends JFrame {
     
-    // Componentes de Configuracion Global
+   // Componentes de Configuracion Global
     private JTextField txtDuracionCiclo;
     private JTextField txtLatenciaRed;
     private JComboBox<String> comboNumComputadores;
@@ -48,6 +49,8 @@ public class Vista1Configuracion extends JFrame {
     private GestorPersistencia gestorPersistencia;
     private EventLog eventLog;
     private MetricasService metricasService;
+
+    private int contadorProcesosId = 1;
 
     // Colores del Tema
     private static final Color COLOR_HEADER = new Color(15, 23, 42);      // Slate Dark
@@ -138,6 +141,9 @@ public class Vista1Configuracion extends JFrame {
         panelInferior.add(btnCargarConfig);
         panelInferior.add(btnIniciarSimulacion);
         this.add(panelInferior, BorderLayout.SOUTH);
+
+        // Sincronizar listas desplegables iniciales
+        actualizarCantidadNodos();
     }
 
     private JPanel crearPanelTarjeta() {
@@ -175,6 +181,9 @@ public class Vista1Configuracion extends JFrame {
         comboNumComputadores = new JComboBox<>(new String[]{"2 Computadores", "3 Computadores", "4 Computadores"});
         estilizarComboBox(comboNumComputadores);
 
+        // Listener para reconfigurar la cantidad de nodos dinámicamente
+        comboNumComputadores.addActionListener(e -> actualizarCantidadNodos());
+
         agregarFilaFormulario(panel, "Duración Ciclo (ms):", txtDuracionCiclo, gbc, 1);
         agregarFilaFormulario(panel, "Latencia Red (ciclos):", txtLatenciaRed, gbc, 2);
         agregarFilaFormulario(panel, "Cantidad de Nodos:", comboNumComputadores, gbc, 3);
@@ -183,6 +192,44 @@ public class Vista1Configuracion extends JFrame {
         panel.add(Box.createGlue(), gbc);
 
         return panel;
+    }
+
+    private void actualizarCantidadNodos() {
+        if (comboNumComputadores == null) return;
+
+        String seleccion = (String) comboNumComputadores.getSelectedItem();
+        int numNodos = 2;
+        if (seleccion != null) {
+            if (seleccion.contains("3")) numNodos = 3;
+            else if (seleccion.contains("4")) numNodos = 4;
+        }
+
+        // Reconstruir el clusterManager con el número seleccionado
+        this.clusterManager = new ClusterManager(numNodos);
+        for (int i = 1; i <= numNodos; i++) {
+            this.clusterManager.agregarComputador(new Computador(i, "Computador " + i, 1024, 2048));
+        }
+
+        // Actualizar selector de nodo destino
+        if (comboNodoDestino != null) {
+            comboNodoDestino.removeAllItems();
+            comboNodoDestino.addItem("Asignación Automática");
+            for (int i = 1; i <= numNodos; i++) {
+                comboNodoDestino.addItem("Nodo " + i);
+            }
+        }
+
+        // Actualizar selector de nodo anfitrión de buffers
+        if (comboNodoAnfitrion != null) {
+            comboNodoAnfitrion.removeAllItems();
+            for (int i = 1; i <= numNodos; i++) {
+                comboNodoAnfitrion.addItem("Nodo " + i);
+            }
+        }
+
+        if (eventLog != null) {
+            eventLog.registrar(0, "Clúster reconfigurado dinámicamente a " + numNodos + " nodos.");
+        }
     }
 
     private JPanel crearPanelCreacionProcesos() {
@@ -283,9 +330,6 @@ public class Vista1Configuracion extends JFrame {
         combo.setBackground(Color.WHITE);
     }
 
-    /**
-     * Creador de botones planos personalizados con renderizado nativo Swing.
-     */
     private JButton crearBotonFlat(String texto, Color bg, Color fg) {
         JButton btn = new JButton(texto) {
             @Override
@@ -336,8 +380,37 @@ public class Vista1Configuracion extends JFrame {
                 return;
             }
 
-            eventLog.registrar(0, "Proceso " + nombre + " (" + comboTipoProceso.getSelectedItem() + ") registrado.");
-            JOptionPane.showMessageDialog(this, "Proceso '" + nombre + "' encolado correctamente.", "Proceso Creado", JOptionPane.INFORMATION_MESSAGE);
+            // Calcular total de páginas según la RAM (4 KB por marco)
+            int totalPaginas = Math.max(1, ram / 4);
+
+            // Instanciación usando el constructor de 6 parámetros de Proceso.java
+            Proceso nuevoProceso = new Proceso(contadorProcesosId++, 0, nombre, prioridad, ciclos, totalPaginas);
+            nuevoProceso.setDeadline(deadline);
+
+            // Asignación dinámica de nodo por ID
+            String dest = (String) comboNodoDestino.getSelectedItem();
+            Computador nodoDestino = null;
+
+            if (dest != null && dest.startsWith("Nodo ")) {
+                try {
+                    int idNodo = Integer.parseInt(dest.replace("Nodo ", "").trim());
+                    nodoDestino = clusterManager.buscarPorId(idNodo);
+                } catch (Exception ex) {
+                    nodoDestino = clusterManager.obtenerNodoMenosCargado();
+                }
+            } else {
+                nodoDestino = clusterManager.obtenerNodoMenosCargado();
+            }
+
+            if (nodoDestino != null) {
+                nodoDestino.encolarProceso(nuevoProceso);
+                eventLog.registrar(0, "Proceso " + nombre + " (" + ram + " KB, " + ciclos + " ciclos) asignado a " + nodoDestino.getNombre());
+                JOptionPane.showMessageDialog(this, "Proceso '" + nombre + "' asignado a " + nodoDestino.getNombre() + " con éxito.", "Proceso Creado", JOptionPane.INFORMATION_MESSAGE);
+            } else {
+                JOptionPane.showMessageDialog(this, "No hay nodos disponibles para asignar el proceso.", "Error", JOptionPane.ERROR_MESSAGE);
+            }
+
+            txtNombreProceso.setText("P" + contadorProcesosId);
 
         } catch (NumberFormatException ex) {
             JOptionPane.showMessageDialog(this, "Ingrese números enteros válidos.", "Error de Entrada", JOptionPane.ERROR_MESSAGE);
@@ -390,15 +463,13 @@ public class Vista1Configuracion extends JFrame {
 
     private void accionIniciarSimulacion(ActionEvent e) {
         if (e == null) return;
-        
-        // Registrar evento de inicio de transicion
+
         eventLog.registrar(0, "Configuración completada. Transicionando a la Vista de Monitoreo.");
-        
-        // Crear e instanciar la Vista 2 pasando los modulos reales construidos en la Vista 1
+
+        // Abrir la Vista 2 con la instancia real de los módulos
         Vista2Monitoreo vista2 = new Vista2Monitoreo(this.clusterManager, this.eventLog, this.metricasService);
         vista2.setVisible(true);
-        
-        // Cerrar la Vista 1 de Configuracion
+
         this.dispose();
     }
 

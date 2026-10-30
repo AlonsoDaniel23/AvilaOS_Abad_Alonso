@@ -4,6 +4,8 @@
  */
 package avilaos.gui;
 
+import avilaos.datastructures.ColaProcesos;
+import avilaos.enums.EstadoProceso;
 import avilaos.model.ClusterManager;
 import avilaos.model.Computador;
 import avilaos.model.MemoriaRAM;
@@ -21,21 +23,25 @@ import java.awt.event.ActionEvent;
  * Permite visualizar el reloj global, CPU, colas de procesos, ocupacion de RAM y selector
  * dinamico de politicas de planificacion por computador.
  * Incluye temporizador Swing para avance de reloj en tiempo real e integración de eventos.
+ * Sincronizado con las firmas reales de Proceso.java, MemoriaRAM.java y ClusterManager.java.
  * 
  * @author Daniel Alonso
- * @version 1.2
+ * @version 1.4
  */
 public class Vista2Monitoreo extends JFrame {
     
-   private ClusterManager clusterManager;
+    private ClusterManager clusterManager;
     private EventLog eventLog;
     private MetricasService metricasService;
     private int cicloRelojGlobal;
     private boolean simulacionEnEjecucion;
 
+    // Colas de procesos terminados por nodo (Estructura propia)
+    private ColaProcesos[] colasTerminados;
+
     // Motor de Simulación
     private Timer timerSimulacion;
-    private int velocidadCicloMs = 1000; // 1 segundo por ciclo por defecto
+    private int velocidadCicloMs = 1000;
 
     // Componentes de Control Global
     private JLabel lblCicloReloj;
@@ -46,17 +52,17 @@ public class Vista2Monitoreo extends JFrame {
     private JPanel panelNodosContainer;
     private JTextArea txtLogEventos;
 
-    // Colores del Tema Corporativo
-    private static final Color COLOR_HEADER = new Color(15, 23, 42);      // Slate Dark
-    private static final Color COLOR_BG = new Color(248, 250, 252);        // Off-White
+    // Colores del Tema
+    private static final Color COLOR_HEADER = new Color(15, 23, 42);
+    private static final Color COLOR_BG = new Color(248, 250, 252);
     private static final Color COLOR_CARD_BG = Color.WHITE;
     private static final Color COLOR_TEXT_HEADER = new Color(30, 41, 59);
     private static final Color COLOR_BORDER = new Color(226, 232, 240);
-    private static final Color COLOR_PRIMARY = new Color(37, 99, 235);    // Royal Blue
-    private static final Color COLOR_SUCCESS = new Color(16, 185, 129);   // Emerald Green
-    private static final Color COLOR_DANGER = new Color(239, 68, 68);     // Red
-    private static final Color COLOR_WARNING = new Color(245, 158, 11);   // Amber
-    private static final Color COLOR_SECONDARY = new Color(71, 85, 105);  // Slate Gray
+    private static final Color COLOR_PRIMARY = new Color(37, 99, 235);
+    private static final Color COLOR_SUCCESS = new Color(16, 185, 129);
+    private static final Color COLOR_DANGER = new Color(239, 68, 68);
+    private static final Color COLOR_WARNING = new Color(245, 158, 11);
+    private static final Color COLOR_SECONDARY = new Color(71, 85, 105);
 
     public Vista2Monitoreo(ClusterManager clusterManager, EventLog eventLog, MetricasService metricasService) {
         super("ÁvilaOS V2 - Panel de Monitoreo de Clúster y Procesos");
@@ -65,6 +71,13 @@ public class Vista2Monitoreo extends JFrame {
         this.metricasService = (metricasService != null) ? metricasService : new MetricasService();
         this.cicloRelojGlobal = 0;
         this.simulacionEnEjecucion = false;
+
+        // Inicializar colas de terminados segun cantidad de nodos
+        int cantNodos = this.clusterManager.getCantidadActual();
+        this.colasTerminados = new ColaProcesos[Math.max(cantNodos, 10)];
+        for (int i = 0; i < this.colasTerminados.length; i++) {
+            this.colasTerminados[i] = new ColaProcesos();
+        }
 
         aplicarLookAndFeel();
         configurarVentana();
@@ -110,7 +123,6 @@ public class Vista2Monitoreo extends JFrame {
     }
 
     private void inicializarTimerSimulacion() {
-        // Timer de Swing que ejecuta un ciclo del sistema en cada intervalo de tiempo
         this.timerSimulacion = new Timer(velocidadCicloMs, (ActionEvent e) -> {
             ejecutarCicloSimulacion();
         });
@@ -120,17 +132,38 @@ public class Vista2Monitoreo extends JFrame {
         cicloRelojGlobal++;
         lblCicloReloj.setText("Reloj Global del Clúster: Ciclo " + cicloRelojGlobal);
 
-        // Notificar el tick a cada nodo de cómputo del backend
         Computador[] nodos = clusterManager.getComputadores();
         for (int i = 0; i < clusterManager.getCantidadActual(); i++) {
-            if (nodos[i] != null) {
-                nodos[i].tick(cicloRelojGlobal);
+            Computador nodo = nodos[i];
+            if (nodo != null) {
+                // Verificar si el proceso en CPU acaba de terminar en este ciclo
+                Proceso activoPrevio = nodo.getCpu().getProcesoActual();
+
+                // Algoritmo de Despacho (Dispatcher)
+                if (!nodo.getCpu().isOcupado() && !nodo.getColaProcesos().estaVacia()) {
+                    Proceso p = (Proceso) nodo.getColaProcesos().desencolar();
+                    if (p != null) {
+                        p.setEstado(EstadoProceso.EJECUCION);
+                        nodo.getCpu().cargarProceso(p);
+                        eventLog.registrar(cicloRelojGlobal, nodo.getNombre() + ": Proceso " + p.getNombre() + " despachado a CPU.");
+                    }
+                }
+
+                // Ejecutar un ciclo de la CPU
+                nodo.tick(cicloRelojGlobal);
+
+                // Si la CPU se libero tras el tick, el proceso finalizo
+                if (activoPrevio != null && nodo.getCpu().getProcesoActual() == null) {
+                    activoPrevio.setEstado(EstadoProceso.TERMINADO);
+                    if (i < colasTerminados.length && colasTerminados[i] != null) {
+                        colasTerminados[i].encolar(activoPrevio);
+                    }
+                    eventLog.registrar(cicloRelojGlobal, nodo.getNombre() + ": Proceso " + activoPrevio.getNombre() + " ha FINALIZADO su ejecución.");
+                }
             }
         }
 
-        eventLog.registrar(cicloRelojGlobal, "Pulso de reloj emitido. Avance a ciclo " + cicloRelojGlobal);
-
-        // Redibujar componentes de hardware y colas en pantalla
+        // Refresco de componentes en pantalla
         panelNodosContainer.removeAll();
         panelNodosContainer.add(crearPanelNodosCluster(), BorderLayout.CENTER);
         panelNodosContainer.revalidate();
@@ -176,7 +209,7 @@ public class Vista2Monitoreo extends JFrame {
         return panel;
     }
 
-    private JPanel crearPanelNodosCluster() {
+    private Component crearPanelNodosCluster() {
         int cantNodos = clusterManager.getCantidadActual();
         Computador[] nodos = clusterManager.getComputadores();
 
@@ -187,14 +220,23 @@ public class Vista2Monitoreo extends JFrame {
         for (int i = 0; i < cantNodos; i++) {
             Computador nodo = nodos[i];
             if (nodo != null) {
-                panelGrid.add(crearTarjetaComputador(nodo));
+                JPanel tarjeta = crearTarjetaComputador(nodo, i);
+                tarjeta.setPreferredSize(new Dimension(380, 480));
+                panelGrid.add(tarjeta);
             }
         }
 
-        return panelGrid;
+        // Envolver en ScrollPane para permitir desplazamiento horizontal si hay mas de 2 nodos
+        JScrollPane scroll = new JScrollPane(panelGrid);
+        scroll.setBorder(null);
+        scroll.getHorizontalScrollBar().setUnitIncrement(16);
+        scroll.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_AS_NEEDED);
+        scroll.setVerticalScrollBarPolicy(JScrollPane.VERTICAL_SCROLLBAR_NEVER);
+
+        return scroll;
     }
 
-    private JPanel crearTarjetaComputador(Computador nodo) {
+    private JPanel crearTarjetaComputador(Computador nodo, int indiceNodo) {
         JPanel tarjeta = new JPanel(new BorderLayout(0, 10));
         tarjeta.setBackground(COLOR_CARD_BG);
         Border bordeLinea = BorderFactory.createLineBorder(COLOR_BORDER, 1, true);
@@ -231,7 +273,7 @@ public class Vista2Monitoreo extends JFrame {
         centroNodo.add(crearBloqueRAM(nodo));
         centroNodo.add(Box.createVerticalStrut(10));
 
-        centroNodo.add(crearBloqueColas(nodo));
+        centroNodo.add(crearBloqueColas(nodo, indiceNodo));
 
         tarjeta.add(centroNodo, BorderLayout.CENTER);
 
@@ -246,8 +288,8 @@ public class Vista2Monitoreo extends JFrame {
                 new Font("Segoe UI", Font.BOLD, 11), COLOR_TEXT_HEADER));
 
         Proceso activo = nodo.getCpu().getProcesoActual();
-        String nombreProceso = (activo != null) ? activo.getNombre() : "IDLE (Inactivo)";
-        String pcValue = (activo != null) ? "PC: " + nodo.getCpu().getProgramCounter() : "PC: 0";
+        String nombreProceso = (activo != null) ? activo.getNombre() + " (Ejecutando)" : "IDLE (Inactivo)";
+        String pcValue = (activo != null) ? "PC: " + nodo.getCpu().getProgramCounter() + " / " + activo.getTiempoEjecucion() : "PC: 0";
         String modo = (nodo.getCpu().getModoActual() != null) ? nodo.getCpu().getModoActual().toString() : "USUARIO";
         String deadline = (activo != null) ? "DL: " + activo.getDeadline() + " c." : "N/A";
 
@@ -291,17 +333,20 @@ public class Vista2Monitoreo extends JFrame {
         return panel;
     }
 
-    private JPanel crearBloqueColas(Computador nodo) {
+    private JPanel crearBloqueColas(Computador nodo, int indiceNodo) {
         JPanel panel = new JPanel(new GridLayout(2, 2, 8, 8));
         panel.setOpaque(false);
 
         int numProcesosCola = (nodo.getColaProcesos() != null) ? nodo.getColaProcesos().getTamaño() : 0;
-        String estadoColaListos = (numProcesosCola > 0) ? "En cola: " + numProcesosCola : "Sin procesos";
+        String textoListos = (numProcesosCola > 0) ? "En cola: " + numProcesosCola + " proceso(s)" : "Sin procesos";
+
+        int numTerminados = (indiceNodo < colasTerminados.length && colasTerminados[indiceNodo] != null) ? colasTerminados[indiceNodo].getTamaño() : 0;
+        String textoTerminados = (numTerminados > 0) ? "Finalizados: " + numTerminados : "Ninguno";
 
         panel.add(crearCajaCola("Cola Nuevos", "Sin procesos", COLOR_PRIMARY));
-        panel.add(crearCajaCola("Cola Listos (" + numProcesosCola + ")", estadoColaListos, COLOR_SUCCESS));
+        panel.add(crearCajaCola("Cola Listos (" + numProcesosCola + ")", textoListos, COLOR_SUCCESS));
         panel.add(crearCajaCola("Cola Bloqueados", "Sin bloqueos", COLOR_DANGER));
-        panel.add(crearCajaCola("Cola Terminados", "Ninguno", COLOR_SECONDARY));
+        panel.add(crearCajaCola("Cola Terminados (" + numTerminados + ")", textoTerminados, COLOR_SECONDARY));
 
         return panel;
     }
