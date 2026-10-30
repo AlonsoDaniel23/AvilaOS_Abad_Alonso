@@ -20,8 +20,10 @@ import java.awt.event.ActionEvent;
  * Vista 2: Panel principal de monitoreo en tiempo real del cluster ÁvilaOS (Requerimiento 6).
  * Permite visualizar el reloj global, CPU, colas de procesos, ocupacion de RAM y selector
  * dinamico de politicas de planificacion por computador.
+ * Incluye temporizador Swing para avance de reloj en tiempo real e integración de eventos.
  * 
  * @author Daniel Alonso
+ * @version 1.2
  */
 public class Vista2Monitoreo extends JFrame {
     
@@ -31,12 +33,17 @@ public class Vista2Monitoreo extends JFrame {
     private int cicloRelojGlobal;
     private boolean simulacionEnEjecucion;
 
+    // Motor de Simulación
+    private Timer timerSimulacion;
+    private int velocidadCicloMs = 1000; // 1 segundo por ciclo por defecto
+
     // Componentes de Control Global
     private JLabel lblCicloReloj;
     private JButton btnPausarReanudar;
     private JButton btnAvanzarCiclo;
 
-    // Componente de Logs Globales
+    // Contenedores Principales
+    private JPanel panelNodosContainer;
     private JTextArea txtLogEventos;
 
     // Colores del Tema Corporativo
@@ -62,6 +69,7 @@ public class Vista2Monitoreo extends JFrame {
         aplicarLookAndFeel();
         configurarVentana();
         construirInterfaz();
+        inicializarTimerSimulacion();
     }
 
     public Vista2Monitoreo() {
@@ -91,14 +99,44 @@ public class Vista2Monitoreo extends JFrame {
     }
 
     private void construirInterfaz() {
-        // Encabezado Superior con Reloj Global y Controles
         this.add(crearPanelEncabezadoReloj(), BorderLayout.NORTH);
 
-        // Panel Central: Nodos del Clúster
-        this.add(crearPanelNodosCluster(), BorderLayout.CENTER);
+        panelNodosContainer = new JPanel(new BorderLayout());
+        panelNodosContainer.setOpaque(false);
+        panelNodosContainer.add(crearPanelNodosCluster(), BorderLayout.CENTER);
+        this.add(panelNodosContainer, BorderLayout.CENTER);
 
-        // Panel Inferior: Auditoría y Log de Eventos
         this.add(crearPanelInferiorLogs(), BorderLayout.SOUTH);
+    }
+
+    private void inicializarTimerSimulacion() {
+        // Timer de Swing que ejecuta un ciclo del sistema en cada intervalo de tiempo
+        this.timerSimulacion = new Timer(velocidadCicloMs, (ActionEvent e) -> {
+            ejecutarCicloSimulacion();
+        });
+    }
+
+    private void ejecutarCicloSimulacion() {
+        cicloRelojGlobal++;
+        lblCicloReloj.setText("Reloj Global del Clúster: Ciclo " + cicloRelojGlobal);
+
+        // Notificar el tick a cada nodo de cómputo del backend
+        Computador[] nodos = clusterManager.getComputadores();
+        for (int i = 0; i < clusterManager.getCantidadActual(); i++) {
+            if (nodos[i] != null) {
+                nodos[i].tick(cicloRelojGlobal);
+            }
+        }
+
+        eventLog.registrar(cicloRelojGlobal, "Pulso de reloj emitido. Avance a ciclo " + cicloRelojGlobal);
+
+        // Redibujar componentes de hardware y colas en pantalla
+        panelNodosContainer.removeAll();
+        panelNodosContainer.add(crearPanelNodosCluster(), BorderLayout.CENTER);
+        panelNodosContainer.revalidate();
+        panelNodosContainer.repaint();
+
+        actualizarVisorLogs();
     }
 
     private JPanel crearPanelEncabezadoReloj() {
@@ -163,7 +201,6 @@ public class Vista2Monitoreo extends JFrame {
         Border bordeInterno = BorderFactory.createEmptyBorder(12, 12, 12, 12);
         tarjeta.setBorder(BorderFactory.createCompoundBorder(bordeLinea, bordeInterno));
 
-        // Cabecera Nodo
         JPanel headerNodo = new JPanel(new BorderLayout());
         headerNodo.setOpaque(false);
 
@@ -184,7 +221,6 @@ public class Vista2Monitoreo extends JFrame {
         headerNodo.add(comboPolitica, BorderLayout.EAST);
         tarjeta.add(headerNodo, BorderLayout.NORTH);
 
-        // Bloques Internos
         JPanel centroNodo = new JPanel();
         centroNodo.setLayout(new BoxLayout(centroNodo, BoxLayout.Y_AXIS));
         centroNodo.setOpaque(false);
@@ -260,9 +296,10 @@ public class Vista2Monitoreo extends JFrame {
         panel.setOpaque(false);
 
         int numProcesosCola = (nodo.getColaProcesos() != null) ? nodo.getColaProcesos().getTamaño() : 0;
+        String estadoColaListos = (numProcesosCola > 0) ? "En cola: " + numProcesosCola : "Sin procesos";
 
-        panel.add(crearCajaCola("Cola Nuevos", "P1 (128KB)", COLOR_PRIMARY));
-        panel.add(crearCajaCola("Cola Listos (" + numProcesosCola + ")", "En cola: " + numProcesosCola, COLOR_SUCCESS));
+        panel.add(crearCajaCola("Cola Nuevos", "Sin procesos", COLOR_PRIMARY));
+        panel.add(crearCajaCola("Cola Listos (" + numProcesosCola + ")", estadoColaListos, COLOR_SUCCESS));
         panel.add(crearCajaCola("Cola Bloqueados", "Sin bloqueos", COLOR_DANGER));
         panel.add(crearCajaCola("Cola Terminados", "Ninguno", COLOR_SECONDARY));
 
@@ -364,10 +401,7 @@ public class Vista2Monitoreo extends JFrame {
 
     private void accionAvanzarCiclo(ActionEvent e) {
         if (e == null) return;
-        cicloRelojGlobal++;
-        lblCicloReloj.setText("Reloj Global del Clúster: Ciclo " + cicloRelojGlobal);
-        eventLog.registrar(cicloRelojGlobal, "Pulso de reloj global emitido. Avanzando ciclo.");
-        actualizarVisorLogs();
+        ejecutarCicloSimulacion();
     }
 
     private void accionPausarReanudar(ActionEvent e) {
@@ -376,9 +410,11 @@ public class Vista2Monitoreo extends JFrame {
         if (simulacionEnEjecucion) {
             btnPausarReanudar.setText("Pausar Simulación");
             btnPausarReanudar.setBackground(COLOR_DANGER);
+            timerSimulacion.start();
         } else {
-            btnPausarReanudar.setText("Reanudar Simulación");
+            btnPausarReanudar.setText("Iniciar Simulación");
             btnPausarReanudar.setBackground(COLOR_SUCCESS);
+            timerSimulacion.stop();
         }
     }
 
