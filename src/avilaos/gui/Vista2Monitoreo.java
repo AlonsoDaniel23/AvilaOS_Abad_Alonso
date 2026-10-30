@@ -36,7 +36,7 @@ public class Vista2Monitoreo extends JFrame {
     private int cicloRelojGlobal;
     private boolean simulacionEnEjecucion;
 
-    // Colas de procesos terminados por nodo (Estructura propia)
+    // Colas de procesos terminados por nodo
     private ColaProcesos[] colasTerminados;
 
     // Motor de Simulación
@@ -47,6 +47,7 @@ public class Vista2Monitoreo extends JFrame {
     private JLabel lblCicloReloj;
     private JButton btnPausarReanudar;
     private JButton btnAvanzarCiclo;
+    private JButton btnVerMetricas;
 
     // Contenedores Principales
     private JPanel panelNodosContainer;
@@ -152,12 +153,15 @@ public class Vista2Monitoreo extends JFrame {
                 // Ejecutar un ciclo de la CPU
                 nodo.tick(cicloRelojGlobal);
 
-                // Si la CPU se libero tras el tick, el proceso finalizo
+                // Si la CPU se liberó tras el tick, el proceso finalizó
                 if (activoPrevio != null && nodo.getCpu().getProcesoActual() == null) {
                     activoPrevio.setEstado(EstadoProceso.TERMINADO);
                     if (i < colasTerminados.length && colasTerminados[i] != null) {
                         colasTerminados[i].encolar(activoPrevio);
                     }
+                    int tiempoRespuesta = cicloRelojGlobal - activoPrevio.getTiempoLlegada();
+                    boolean cumplioDeadline = cicloRelojGlobal <= activoPrevio.getDeadline();
+                    metricasService.registrarProcesoTerminado(tiempoRespuesta, cumplioDeadline);
                     eventLog.registrar(cicloRelojGlobal, nodo.getNombre() + ": Proceso " + activoPrevio.getNombre() + " ha FINALIZADO su ejecución.");
                 }
             }
@@ -194,12 +198,15 @@ public class Vista2Monitoreo extends JFrame {
         JPanel panelBotonera = new JPanel(new FlowLayout(FlowLayout.RIGHT, 10, 0));
         panelBotonera.setOpaque(false);
 
+        btnVerMetricas = crearBotonFlat("📊 Métricas", COLOR_SECONDARY, Color.WHITE);
         btnAvanzarCiclo = crearBotonFlat("Siguiente Ciclo  →", COLOR_PRIMARY, Color.WHITE);
         btnPausarReanudar = crearBotonFlat("Iniciar Simulación", COLOR_SUCCESS, Color.WHITE);
 
+        btnVerMetricas.addActionListener(e -> mostrarVentanaMetricas());
         btnAvanzarCiclo.addActionListener(this::accionAvanzarCiclo);
         btnPausarReanudar.addActionListener(this::accionPausarReanudar);
 
+        panelBotonera.add(btnVerMetricas);
         panelBotonera.add(btnAvanzarCiclo);
         panelBotonera.add(btnPausarReanudar);
 
@@ -207,6 +214,60 @@ public class Vista2Monitoreo extends JFrame {
         panel.add(panelBotonera, BorderLayout.EAST);
 
         return panel;
+    }
+
+    private void mostrarVentanaMetricas() {
+        JDialog dialog = new JDialog(this, "Estadísticas y Métricas del Clúster", true);
+        dialog.setSize(480, 360);
+        dialog.setLocationRelativeTo(this);
+        dialog.setLayout(new BorderLayout(15, 15));
+        dialog.getContentPane().setBackground(COLOR_BG);
+
+        JPanel panelTitulo = new JPanel(new FlowLayout(FlowLayout.LEFT));
+        panelTitulo.setBackground(COLOR_HEADER);
+        JLabel lblTitulo = new JLabel("📊 MÉTRICAS Y RENDIMIENTO DEL SISTEMA");
+        lblTitulo.setForeground(Color.WHITE);
+        lblTitulo.setFont(new Font("Segoe UI", Font.BOLD, 14));
+        panelTitulo.add(lblTitulo);
+
+        JPanel panelGrid = new JPanel(new GridLayout(5, 2, 10, 10));
+        panelGrid.setBorder(BorderFactory.createEmptyBorder(15, 20, 15, 20));
+        panelGrid.setOpaque(false);
+
+        int completados = metricasService.getProcesosCompletadosTotales();
+        double throughput = metricasService.calcularThroughput(cicloRelojGlobal);
+        double tasaDeadlines = metricasService.calcularTasaCumplimientoDeadlines();
+        double tiempoRespProm = metricasService.calcularTiempoRespuestaPromedio();
+        int producidos = metricasService.getElementosProducidosTotales();
+        int consumidos = metricasService.getElementosConsumidosTotales();
+
+        panelGrid.add(crearLabelEtiqueta("Procesos Completados:"));
+        panelGrid.add(crearLabelValor(completados + " proceso(s)", COLOR_PRIMARY));
+
+        panelGrid.add(crearLabelEtiqueta("Throughput Global:"));
+        panelGrid.add(crearLabelValor(String.format("%.3f proc/ciclo", throughput), COLOR_SUCCESS));
+
+        panelGrid.add(crearLabelEtiqueta("Cumplimiento Deadlines:"));
+        panelGrid.add(crearLabelValor(String.format("%.1f %%", tasaDeadlines), tasaDeadlines < 100 ? COLOR_WARNING : COLOR_SUCCESS));
+
+        panelGrid.add(crearLabelEtiqueta("Tiempo Resp. Promedio:"));
+        panelGrid.add(crearLabelValor(String.format("%.2f ciclos", tiempoRespProm), COLOR_TEXT_HEADER));
+
+        panelGrid.add(crearLabelEtiqueta("Producción / Consumo:"));
+        panelGrid.add(crearLabelValor(producidos + " / " + consumidos, COLOR_SECONDARY));
+
+        JButton btnCerrar = crearBotonFlat("Cerrar", COLOR_PRIMARY, Color.WHITE);
+        btnCerrar.addActionListener(e -> dialog.dispose());
+
+        JPanel panelBoton = new JPanel(new FlowLayout(FlowLayout.CENTER));
+        panelBoton.setOpaque(false);
+        panelBoton.add(btnCerrar);
+
+        dialog.add(panelTitulo, BorderLayout.NORTH);
+        dialog.add(panelGrid, BorderLayout.CENTER);
+        dialog.add(panelBoton, BorderLayout.SOUTH);
+
+        dialog.setVisible(true);
     }
 
     private Component crearPanelNodosCluster() {
@@ -226,7 +287,6 @@ public class Vista2Monitoreo extends JFrame {
             }
         }
 
-        // Envolver en ScrollPane para permitir desplazamiento horizontal si hay mas de 2 nodos
         JScrollPane scroll = new JScrollPane(panelGrid);
         scroll.setBorder(null);
         scroll.getHorizontalScrollBar().setUnitIncrement(16);

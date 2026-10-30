@@ -8,7 +8,7 @@ import avilaos.enums.EstadoProceso;
  * jerarquia, estado de Stallings, deadline y Tabla de Paginas para Memoria Virtual.
  * 
  * @author Equipo AvilaOS
- * @version 1.2
+ * @version 1.3
  */
 public class Proceso {
     
@@ -18,12 +18,13 @@ public class Proceso {
     private EstadoProceso estado;
     private int prioridad;
     private int deadline; // Agregado para soporte del algoritmo EDF
+    private int tiempoLlegada; // Ciclo de reloj en el que ingresó el proceso
     private int tiempoCpuConsumido;
     private int tiempoEjecucion; // Tiempo total requerido en CPU
     private EntradaTablaPaginas[] tablaPaginas;
 
     /**
-     * Constructor base (mantiene compatibilidad con codigo previo).
+     * Constructor base.
      */
     public Proceso(int id, String nombre, int tiempoEjecucion) {
         this(id, 0, nombre, 1, tiempoEjecucion, 4); // 4 paginas por defecto
@@ -39,6 +40,7 @@ public class Proceso {
         this.estado = EstadoProceso.NUEVO;
         this.prioridad = prioridad;
         this.deadline = 0; // Valor por defecto
+        this.tiempoLlegada = 0; // Ciclo 0 por defecto
         this.tiempoCpuConsumido = 0;
         this.tiempoEjecucion = tiempoEjecucion;
 
@@ -99,6 +101,14 @@ public class Proceso {
 
     public void setDeadline(int deadline) {
         this.deadline = deadline;
+    }
+
+    public int getTiempoLlegada() {
+        return tiempoLlegada;
+    }
+
+    public void setTiempoLlegada(int tiempoLlegada) {
+        this.tiempoLlegada = tiempoLlegada;
     }
 
     public int getTiempoCpuConsumido() {
