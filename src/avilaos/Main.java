@@ -10,7 +10,7 @@ import avilaos.scheduling.PlanificadorEDF;
 /**
  * Punto de entrada principal para pruebas de integracion de AvilaOS.
  * 
- * @author Gustavo Abad
+ * @author Equipo AvilaOS
  */
 public class Main {
 
