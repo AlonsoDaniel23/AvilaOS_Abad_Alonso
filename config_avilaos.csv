@@ -1,7 +1,11 @@
 # CONFIGURACION GLOBAL AVILAOS
-DuracionCicloMs,1000
-LatenciaRedCiclos,2
-CantidadComputadores,2
-# NODOS DE COMPUTO (ID,Nombre,RAM_KB,Swap_KB)
-1,Computador 1,1024,2048
-2,Computador 2,1024,2048
+PARAMETRO,DuracionCicloMs,1000
+PARAMETRO,LatenciaRedCiclos,3
+PARAMETRO,CantidadComputadores,2
+# NODOS DE COMPUTO (NODO,ID,Nombre,RAM_KB,Swap_KB)
+NODO,1,Computador 1,1024,2048
+NODO,2,Computador 2,1024,2048
+# BUFFERS (BUFFER,Nombre,Capacidad,IdAnfitrion)
+BUFFER,B1,1,1
+# PROCESOS (PROCESO,Id,IdPadre,Nombre,Prioridad,TiempoEjecucion,Tipo,NombreBuffer,IdNodo)
+PROCESO,1,0,P1,1,10,PRODUCTOR,B1,2

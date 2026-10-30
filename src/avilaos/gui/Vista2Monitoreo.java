@@ -5,6 +5,7 @@
 package avilaos.gui;
 
 import avilaos.datastructures.ColaProcesos;
+import avilaos.datastructures.ListaEnlazada;
 import avilaos.enums.EstadoProceso;
 import avilaos.model.ClusterManager;
 import avilaos.model.Computador;
@@ -12,6 +13,7 @@ import avilaos.model.MemoriaRAM;
 import avilaos.model.Proceso;
 import avilaos.services.EventLog;
 import avilaos.services.MetricasService;
+import avilaos.synchronization.BufferCircular;
 
 import javax.swing.*;
 import javax.swing.border.*;
@@ -26,7 +28,7 @@ import java.awt.event.ActionEvent;
  * Sincronizado con las firmas reales de Proceso.java, MemoriaRAM.java y ClusterManager.java.
  * 
  * @author Daniel Alonso
- * @version 1.6
+ * @version 1.8
  */
 public class Vista2Monitoreo extends JFrame {
     
@@ -96,7 +98,7 @@ public class Vista2Monitoreo extends JFrame {
 
     private void configurarVentana() {
         this.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
-        this.setSize(1200, 750);
+        this.setSize(1240, 800);
         this.setLocationRelativeTo(null);
         this.getContentPane().setBackground(COLOR_BG);
         this.setLayout(new BorderLayout(0, 0));
@@ -105,11 +107,13 @@ public class Vista2Monitoreo extends JFrame {
     private void construirInterfaz() {
         this.add(crearPanelEncabezadoReloj(), BorderLayout.NORTH);
 
-        panelNodosContainer = new JPanel(new BorderLayout());
+        panelNodosContainer = new JPanel(new BorderLayout(0, 10));
         panelNodosContainer.setOpaque(false);
+        
+        panelNodosContainer.add(crearPanelBuffersGlobales(), BorderLayout.NORTH);
         panelNodosContainer.add(crearPanelNodosCluster(), BorderLayout.CENTER);
+        
         this.add(panelNodosContainer, BorderLayout.CENTER);
-
         this.add(crearPanelInferiorLogs(), BorderLayout.SOUTH);
     }
 
@@ -130,19 +134,20 @@ public class Vista2Monitoreo extends JFrame {
                 Proceso activoPrevio = nodo.getCpu().getProcesoActual();
                 int terminadosPrevio = (nodo.getColaTerminados() != null) ? nodo.getColaTerminados().getTamaño() : 0;
 
-                // Delegar la ejecución del ciclo completamente al objeto Computador
                 nodo.tick(cicloRelojGlobal);
+
+                // Registrar utilización instantánea de CPU para la gráfica vs tiempo (Requerimiento 8)
+                double usoCpu = nodo.getCpu().isOcupado() ? 100.0 : 0.0;
+                metricasService.registrarUsoCpuNodo(nodo.getIdComputador(), cicloRelojGlobal, usoCpu);
 
                 Proceso activoActual = nodo.getCpu().getProcesoActual();
                 int terminadosActual = (nodo.getColaTerminados() != null) ? nodo.getColaTerminados().getTamaño() : 0;
 
-                // Evento: Se despachó un proceso a la CPU
                 if (activoPrevio != activoActual && activoActual != null) {
                     eventLog.registrar(cicloRelojGlobal, nodo.getNombre() + ": Proceso " + activoActual.getNombre() + 
                         " en ejecución en CPU bajo política (" + nodo.getNombrePoliticaActual() + ").");
                 }
 
-                // Evento: Un proceso finalizó su ejecución
                 if (terminadosActual > terminadosPrevio) {
                     Proceso ultimoTerminado = (Proceso) nodo.getColaTerminados().obtener(terminadosActual - 1);
                     if (ultimoTerminado != null) {
@@ -155,8 +160,9 @@ public class Vista2Monitoreo extends JFrame {
             }
         }
 
-        // Refresco de componentes en pantalla
+        // Refresco dinámico de paneles
         panelNodosContainer.removeAll();
+        panelNodosContainer.add(crearPanelBuffersGlobales(), BorderLayout.NORTH);
         panelNodosContainer.add(crearPanelNodosCluster(), BorderLayout.CENTER);
         panelNodosContainer.revalidate();
         panelNodosContainer.repaint();
@@ -204,11 +210,111 @@ public class Vista2Monitoreo extends JFrame {
         return panel;
     }
 
+    /**
+     * Panel Global para la visualización de Buffers Compartidos y Semáforos (Requerimiento 6).
+     */
+    private JPanel crearPanelBuffersGlobales() {
+        JPanel panel = new JPanel(new BorderLayout(5, 5));
+        panel.setBackground(COLOR_BG);
+        panel.setBorder(BorderFactory.createCompoundBorder(
+            BorderFactory.createEmptyBorder(10, 15, 0, 15),
+            BorderFactory.createTitledBorder(
+                BorderFactory.createLineBorder(COLOR_BORDER, 1),
+                "📦 ESTADO GLOBAL DE BUFFERS COMPARTIDOS Y SEMÁFOROS",
+                TitledBorder.LEFT, TitledBorder.TOP,
+                new Font("Segoe UI", Font.BOLD, 11), COLOR_TEXT_HEADER)
+        ));
+
+        ListaEnlazada listaBuf = clusterManager.getListaBuffers();
+        int totalBuffers = (listaBuf != null) ? listaBuf.getTamaño() : 0;
+
+        if (totalBuffers == 0) {
+            JLabel lblEmpty = new JLabel("No hay buffers registrados en la simulación.", SwingConstants.CENTER);
+            lblEmpty.setFont(new Font("Segoe UI", Font.ITALIC, 11));
+            lblEmpty.setForeground(COLOR_SECONDARY);
+            lblEmpty.setPreferredSize(new Dimension(300, 40));
+            panel.add(lblEmpty, BorderLayout.CENTER);
+            return panel;
+        }
+
+        JPanel gridBuffers = new JPanel(new GridLayout(1, Math.max(totalBuffers, 1), 10, 0));
+        gridBuffers.setOpaque(false);
+
+        for (int i = 0; i < totalBuffers; i++) {
+            BufferCircular b = (BufferCircular) listaBuf.obtener(i);
+            if (b != null) {
+                gridBuffers.add(crearTarjetaBuffer(b));
+            }
+        }
+
+        JScrollPane scroll = new JScrollPane(gridBuffers);
+        scroll.setBorder(null);
+        scroll.getHorizontalScrollBar().setUnitIncrement(12);
+        scroll.setVerticalScrollBarPolicy(JScrollPane.VERTICAL_SCROLLBAR_NEVER);
+        scroll.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_AS_NEEDED);
+
+        panel.add(scroll, BorderLayout.CENTER);
+        return panel;
+    }
+
+    private JPanel crearTarjetaBuffer(BufferCircular b) {
+        JPanel tarjeta = new JPanel(new BorderLayout(5, 4));
+        tarjeta.setBackground(Color.WHITE);
+        tarjeta.setBorder(BorderFactory.createCompoundBorder(
+            BorderFactory.createLineBorder(COLOR_PRIMARY, 1, true),
+            BorderFactory.createEmptyBorder(6, 10, 6, 10)
+        ));
+
+        JLabel lblTitulo = new JLabel("Buffer: " + b.getNombre() + " (Anfitrión: Nodo " + b.getIdComputadorAnfitrion() + ")");
+        lblTitulo.setFont(new Font("Segoe UI", Font.BOLD, 11));
+        lblTitulo.setForeground(COLOR_PRIMARY);
+
+        int elemAlmacenados = b.getItems().getValor();
+        int cap = b.getCapacidad();
+        int valMutex = b.getMutex().getValor();
+        int valItems = b.getItems().getValor();
+        int valEspacios = b.getEspacios().getValor();
+
+        StringBuilder sbBloq = new StringBuilder();
+        int contBloq = 0;
+        Computador[] nodos = clusterManager.getComputadores();
+        for (int i = 0; i < clusterManager.getCantidadActual(); i++) {
+            Computador c = nodos[i];
+            if (c != null && c.getColaBloqueados() != null) {
+                for (int k = 0; k < c.getColaBloqueados().getTamaño(); k++) {
+                    Proceso p = (Proceso) c.getColaBloqueados().obtener(k);
+                    if (p != null && b.getNombre().equalsIgnoreCase(p.getNombreBuffer())) {
+                        if (contBloq > 0) sbBloq.append(", ");
+                        sbBloq.append(p.getNombre()).append(" (N").append(c.getIdComputador()).append(")");
+                        contBloq++;
+                    }
+                }
+            }
+        }
+
+        String txtBloq = (contBloq > 0) ? sbBloq.toString() : "Ninguno";
+
+        JPanel panelDetalles = new JPanel(new GridLayout(3, 1, 2, 2));
+        panelDetalles.setOpaque(false);
+
+        panelDetalles.add(crearLabelEtiqueta("Ocupación: " + elemAlmacenados + " / " + cap + " elementos"));
+        panelDetalles.add(crearLabelValor("Semáforos: [Mutex: " + valMutex + " | Items: " + valItems + " | Espacios: " + valEspacios + "]", COLOR_TEXT_HEADER));
+        panelDetalles.add(crearLabelEtiqueta("Bloqueados (" + contBloq + "): " + txtBloq));
+
+        tarjeta.add(lblTitulo, BorderLayout.NORTH);
+        tarjeta.add(panelDetalles, BorderLayout.CENTER);
+
+        return tarjeta;
+    }
+
+    /**
+     * Muestra el diálogo modal de Métricas integrando la Gráfica de Utilización de CPU vs Tiempo (Requerimiento 8).
+     */
     private void mostrarVentanaMetricas() {
         JDialog dialog = new JDialog(this, "Estadísticas y Métricas del Clúster", true);
-        dialog.setSize(480, 360);
+        dialog.setSize(640, 540);
         dialog.setLocationRelativeTo(this);
-        dialog.setLayout(new BorderLayout(15, 15));
+        dialog.setLayout(new BorderLayout(10, 10));
         dialog.getContentPane().setBackground(COLOR_BG);
 
         JPanel panelTitulo = new JPanel(new FlowLayout(FlowLayout.LEFT));
@@ -218,8 +324,9 @@ public class Vista2Monitoreo extends JFrame {
         lblTitulo.setFont(new Font("Segoe UI", Font.BOLD, 14));
         panelTitulo.add(lblTitulo);
 
-        JPanel panelGrid = new JPanel(new GridLayout(5, 2, 10, 10));
-        panelGrid.setBorder(BorderFactory.createEmptyBorder(15, 20, 15, 20));
+        // Panel numérico superior
+        JPanel panelGrid = new JPanel(new GridLayout(3, 2, 10, 6));
+        panelGrid.setBorder(BorderFactory.createEmptyBorder(10, 20, 5, 20));
         panelGrid.setOpaque(false);
 
         int completados = metricasService.getProcesosCompletadosTotales();
@@ -244,6 +351,16 @@ public class Vista2Monitoreo extends JFrame {
         panelGrid.add(crearLabelEtiqueta("Producción / Consumo:"));
         panelGrid.add(crearLabelValor(producidos + " / " + consumidos, COLOR_SECONDARY));
 
+        // Panel central con la Gráfica de CPU vs Tiempo
+        PanelGraficaCPU panelGrafica = new PanelGraficaCPU(clusterManager, metricasService);
+        panelGrafica.setPreferredSize(new Dimension(580, 220));
+
+        JPanel panelCentro = new JPanel(new BorderLayout(5, 5));
+        panelCentro.setOpaque(false);
+        panelCentro.setBorder(BorderFactory.createEmptyBorder(0, 15, 0, 15));
+        panelCentro.add(panelGrid, BorderLayout.NORTH);
+        panelCentro.add(panelGrafica, BorderLayout.CENTER);
+
         JButton btnCerrar = crearBotonFlat("Cerrar", COLOR_PRIMARY, Color.WHITE);
         btnCerrar.addActionListener(e -> dialog.dispose());
 
@@ -252,10 +369,101 @@ public class Vista2Monitoreo extends JFrame {
         panelBoton.add(btnCerrar);
 
         dialog.add(panelTitulo, BorderLayout.NORTH);
-        dialog.add(panelGrid, BorderLayout.CENTER);
+        dialog.add(panelCentro, BorderLayout.CENTER);
         dialog.add(panelBoton, BorderLayout.SOUTH);
 
         dialog.setVisible(true);
+    }
+
+    /**
+     * Componente Swing nativo para renderizar la Gráfica de Utilización de CPU vs Tiempo (Requerimiento 8).
+     */
+    private static class PanelGraficaCPU extends JPanel {
+        private final ClusterManager clusterManager;
+        private final MetricasService metricasService;
+        private final Color[] coloresNodos = {COLOR_PRIMARY, COLOR_SUCCESS, COLOR_DANGER, COLOR_WARNING};
+
+        public PanelGraficaCPU(ClusterManager cm, MetricasService ms) {
+            this.clusterManager = cm;
+            this.metricasService = ms;
+            this.setBackground(new Color(15, 23, 42)); // Fondo oscuro estilo Dashboard
+            this.setBorder(BorderFactory.createTitledBorder(
+                BorderFactory.createLineBorder(new Color(51, 65, 85)), "Utilización del Procesador vs. Tiempo (Ciclos)",
+                TitledBorder.LEFT, TitledBorder.TOP, new Font("Segoe UI", Font.BOLD, 11), Color.WHITE));
+        }
+
+        @Override
+        protected void paintComponent(Graphics g) {
+            super.paintComponent(g);
+            Graphics2D g2 = (Graphics2D) g.create();
+            g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+
+            int width = getWidth();
+            int height = getHeight();
+            int paddingLeft = 45;
+            int paddingRight = 20;
+            int paddingTop = 30;
+            int paddingBottom = 30;
+
+            int graphW = width - paddingLeft - paddingRight;
+            int graphH = height - paddingTop - paddingBottom;
+
+            // Dibujar Ejes y Líneas de Cuadrícula (0%, 25%, 50%, 75%, 100%)
+            g2.setColor(new Color(51, 65, 85));
+            for (int i = 0; i <= 4; i++) {
+                int y = paddingTop + (graphH * i / 4);
+                g2.drawLine(paddingLeft, y, width - paddingRight, y);
+
+                g2.setColor(new Color(148, 163, 184));
+                g2.setFont(new Font("Segoe UI", Font.PLAIN, 9));
+                int pct = 100 - (i * 25);
+                g2.drawString(pct + "%", 12, y + 4);
+                g2.setColor(new Color(51, 65, 85));
+            }
+
+            int maxCiclo = metricasService.getMaxCicloRegistrado();
+            if (maxCiclo < 1) maxCiclo = 1;
+
+            // Dibujar Línea de Tiempo de cada Computador
+            Computador[] nodos = clusterManager.getComputadores();
+            int cantNodos = clusterManager.getCantidadActual();
+
+            for (int i = 0; i < cantNodos; i++) {
+                Computador c = nodos[i];
+                if (c == null) continue;
+
+                double[] historial = metricasService.getHistorialCpuNodo(c.getIdComputador());
+                if (historial.length < 2) continue;
+
+                Color colorNodo = coloresNodos[i % coloresNodos.length];
+                g2.setColor(colorNodo);
+                g2.setStroke(new BasicStroke(2.0f));
+
+                for (int ciclo = 0; ciclo < historial.length - 1; ciclo++) {
+                    int x1 = paddingLeft + (ciclo * graphW / maxCiclo);
+                    int y1 = paddingTop + graphH - (int) (historial[ciclo] * graphH / 100.0);
+
+                    int x2 = paddingLeft + ((ciclo + 1) * graphW / maxCiclo);
+                    int y2 = paddingTop + graphH - (int) (historial[ciclo + 1] * graphH / 100.0);
+
+                    g2.drawLine(x1, y1, x2, y2);
+                }
+
+                // Leyenda del nodo en la parte superior derecha
+                g2.fillRect(width - paddingRight - (100 * (cantNodos - i)), 12, 10, 10);
+                g2.setColor(Color.WHITE);
+                g2.setFont(new Font("Segoe UI", Font.BOLD, 10));
+                g2.drawString("Nodo " + c.getIdComputador(), width - paddingRight - (100 * (cantNodos - i)) + 14, 21);
+            }
+
+            // Etiqueta del eje X (Ciclos)
+            g2.setColor(new Color(148, 163, 184));
+            g2.setFont(new Font("Segoe UI", Font.PLAIN, 10));
+            g2.drawString("0 c.", paddingLeft - 5, height - 10);
+            g2.drawString(maxCiclo + " ciclos", width - paddingRight - 30, height - 10);
+
+            g2.dispose();
+        }
     }
 
     private Component crearPanelNodosCluster() {
@@ -264,13 +472,13 @@ public class Vista2Monitoreo extends JFrame {
 
         JPanel panelGrid = new JPanel(new GridLayout(1, Math.max(cantNodos, 1), 15, 0));
         panelGrid.setBackground(COLOR_BG);
-        panelGrid.setBorder(BorderFactory.createEmptyBorder(15, 15, 15, 15));
+        panelGrid.setBorder(BorderFactory.createEmptyBorder(10, 15, 15, 15));
 
         for (int i = 0; i < cantNodos; i++) {
             Computador nodo = nodos[i];
             if (nodo != null) {
                 JPanel tarjeta = crearTarjetaComputador(nodo, i);
-                tarjeta.setPreferredSize(new Dimension(380, 480));
+                tarjeta.setPreferredSize(new Dimension(380, 450));
                 panelGrid.add(tarjeta);
             }
         }
@@ -403,7 +611,7 @@ public class Vista2Monitoreo extends JFrame {
             sbNuevos.append("Sin procesos");
         }
 
-        // 2. Cola Listos (Consulta la cola efectiva del planificador activo)
+        // 2. Cola Listos
         ColaProcesos colaListos = nodo.getColaListosEfectiva();
         int numListos = (colaListos != null) ? colaListos.getTamaño() : 0;
         StringBuilder sbListos = new StringBuilder();
@@ -419,7 +627,7 @@ public class Vista2Monitoreo extends JFrame {
             sbListos.append("Sin procesos");
         }
 
-        // 3. Cola Bloqueados (Lectura dinámica de bloqueos por semáforo)
+        // 3. Cola Bloqueados
         ColaProcesos colaBloq = nodo.getColaBloqueados();
         int numBloqueados = (colaBloq != null) ? colaBloq.getTamaño() : 0;
         StringBuilder sbBloqueados = new StringBuilder();
