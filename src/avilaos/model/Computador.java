@@ -303,8 +303,9 @@ public class Computador implements IRelojListener {
     }
 
     /**
-     * Gestiona el acceso al Buffer Circular mediante semáforos si el proceso es Productor/Consumidor.
-     * @return true si el proceso se bloqueó por semáforo, false en caso contrario.
+     * Gestiona el acceso al Buffer Circular mediante semáforos si el proceso es Productor/Consumidor,
+     * aplicando la penalización de latencia de red si el buffer reside en un computador remoto.
+     * @return true si el proceso se bloqueó por semáforo o por latencia de red, false en caso contrario.
      */
     private boolean evaluarSincronizacionBuffer(Proceso p) {
         if (p == null || p.getTipo() == null) {
@@ -316,6 +317,29 @@ public class Computador implements IRelojListener {
             return false;
         }
 
+        // 1. Evaluación de Latencia de Red para accesos a Buffers Remotos
+        boolean esRemoto = (buffer.getIdComputadorAnfitrion() != this.idComputador);
+
+        if (esRemoto) {
+            int latenciaConfigurada = ClusterManager.getInstancia().getLatenciaRed();
+
+            // Primera detección del acceso remoto para este ciclo/operación
+            if (p.getCiclosLatenciaPendientes() == -1) {
+                p.setCiclosLatenciaPendientes(latenciaConfigurada);
+                EventLog.getInstancia().registrar("[Ciclo " + RelojGlobal.getInstancia().getCicloActual() + 
+                    "] Proceso " + p.getNombre() + " (Nodo " + this.idComputador + 
+                    ") accede al Buffer " + buffer.getNombre() + " de forma REMOTA en Nodo " + 
+                    buffer.getIdComputadorAnfitrion() + " (Latencia: " + latenciaConfigurada + " ciclos)");
+            }
+
+            // Descontar ciclos de latencia de red pendientes
+            if (p.getCiclosLatenciaPendientes() > 0) {
+                p.setCiclosLatenciaPendientes(p.getCiclosLatenciaPendientes() - 1);
+                return true; // Se bloquea temporalmente por retardo de red
+            }
+        }
+
+        // 2. Evaluación de Semáforos (Buffer Local o Latencia de Red ya cumplida)
         if (p.getTipo() == TipoProceso.PRODUCTOR) {
             boolean exito = buffer.producir(p);
             if (!exito) {
@@ -324,6 +348,7 @@ public class Computador implements IRelojListener {
                 return true;
             }
             p.setOperacionBufferRealizada(true);
+            p.setCiclosLatenciaPendientes(-1); // Reinicia el contador de latencia
         } else if (p.getTipo() == TipoProceso.CONSUMIDOR) {
             boolean exito = buffer.consumir(p);
             if (!exito) {
@@ -332,6 +357,7 @@ public class Computador implements IRelojListener {
                 return true;
             }
             p.setOperacionBufferRealizada(true);
+            p.setCiclosLatenciaPendientes(-1); // Reinicia el contador de latencia
         }
 
         return false;

@@ -16,6 +16,7 @@ public class BufferCircular {
     private int entrada;
     private int salida;
     private int capacidad;
+    private int idComputadorAnfitrion; // <--- ID del nodo anfitrión donde reside el buffer
     
     private Semaforo mutex;
     private Semaforo items;
@@ -23,11 +24,12 @@ public class BufferCircular {
     private MetricasService metricas;
 
     /**
-     * Constructor con nombre explícito del buffer.
+     * Constructor completo especificando nodo anfitrión.
      */
-    public BufferCircular(String nombre, int capacidad, MetricasService metricas) {
+    public BufferCircular(String nombre, int capacidad, int idComputadorAnfitrion, MetricasService metricas) {
         this.nombre = (nombre != null && !nombre.isEmpty()) ? nombre : "B1";
         this.capacidad = capacidad;
+        this.idComputadorAnfitrion = idComputadorAnfitrion;
         this.buffer = new Proceso[capacidad];
         this.entrada = 0;
         this.salida = 0;
@@ -39,20 +41,22 @@ public class BufferCircular {
     }
 
     /**
-     * Constructor base de compatibilidad.
+     * Constructor con nombre explícito del buffer (asigna Nodo 1 por defecto).
      */
-    public BufferCircular(int capacidad, MetricasService metricas) {
-        this("B1", capacidad, metricas);
+    public BufferCircular(String nombre, int capacidad, MetricasService metricas) {
+        this(nombre, capacidad, 1, metricas);
     }
 
     /**
-     * Inserta un nuevo proceso producido en el buffer circular.
-     * @return true si produjo exitosamente; false si el semáforo 'espacios' bloqueó el proceso.
+     * Constructor base de compatibilidad.
      */
+    public BufferCircular(int capacidad, MetricasService metricas) {
+        this("B1", capacidad, 1, metricas);
+    }
+
     public boolean producir(Proceso proceso) {
-        // Verifica si hay espacio libre en el semáforo de espacios
         if (espacios.getValor() <= 0) {
-            return false; // El buffer está lleno: el proceso debe pasar a Cola Bloqueados
+            return false;
         }
 
         espacios.waitSemaforo();
@@ -71,14 +75,9 @@ public class BufferCircular {
         return true;
     }
 
-    /**
-     * Extrae un proceso consumido del buffer circular pasando el proceso consumidor.
-     * @return true si consumió exitosamente; false si el semáforo 'items' bloqueó el proceso.
-     */
     public boolean consumir(Proceso proceso) {
-        // Verifica si hay elementos disponibles en el semáforo de ítems
         if (items.getValor() <= 0) {
-            return false; // El buffer está vacío: el proceso debe pasar a Cola Bloqueados
+            return false;
         }
 
         items.waitSemaforo();
@@ -98,9 +97,6 @@ public class BufferCircular {
         return true;
     }
 
-    /**
-     * Sobrecarga de extracción directa.
-     */
     public Proceso consumir() {
         if (items.getValor() <= 0) {
             return null;
@@ -123,27 +119,12 @@ public class BufferCircular {
     }
 
     // Getters y Setters
-    public String getNombre() {
-        return nombre;
-    }
-
-    public void setNombre(String nombre) {
-        this.nombre = nombre;
-    }
-
-    public int getCapacidad() {
-        return capacidad;
-    }
-
-    public Semaforo getMutex() {
-        return mutex;
-    }
-
-    public Semaforo getItems() {
-        return items;
-    }
-
-    public Semaforo getEspacios() {
-        return espacios;
-    }
+    public String getNombre() { return nombre; }
+    public void setNombre(String nombre) { this.nombre = nombre; }
+    public int getCapacidad() { return capacidad; }
+    public int getIdComputadorAnfitrion() { return idComputadorAnfitrion; }
+    public void setIdComputadorAnfitrion(int idComputadorAnfitrion) { this.idComputadorAnfitrion = idComputadorAnfitrion; }
+    public Semaforo getMutex() { return mutex; }
+    public Semaforo getItems() { return items; }
+    public Semaforo getEspacios() { return espacios; }
 }
