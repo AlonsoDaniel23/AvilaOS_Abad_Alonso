@@ -26,7 +26,7 @@ import java.awt.event.ActionEvent;
  * Sincronizado con las firmas reales de Proceso.java, MemoriaRAM.java y ClusterManager.java.
  * 
  * @author Daniel Alonso
- * @version 1.4
+ * @version 1.6
  */
 public class Vista2Monitoreo extends JFrame {
     
@@ -35,9 +35,6 @@ public class Vista2Monitoreo extends JFrame {
     private MetricasService metricasService;
     private int cicloRelojGlobal;
     private boolean simulacionEnEjecucion;
-
-    // Colas de procesos terminados por nodo
-    private ColaProcesos[] colasTerminados;
 
     // Motor de Simulación
     private Timer timerSimulacion;
@@ -72,13 +69,6 @@ public class Vista2Monitoreo extends JFrame {
         this.metricasService = (metricasService != null) ? metricasService : new MetricasService();
         this.cicloRelojGlobal = 0;
         this.simulacionEnEjecucion = false;
-
-        // Inicializar colas de terminados segun cantidad de nodos
-        int cantNodos = this.clusterManager.getCantidadActual();
-        this.colasTerminados = new ColaProcesos[Math.max(cantNodos, 10)];
-        for (int i = 0; i < this.colasTerminados.length; i++) {
-            this.colasTerminados[i] = new ColaProcesos();
-        }
 
         aplicarLookAndFeel();
         configurarVentana();
@@ -137,32 +127,30 @@ public class Vista2Monitoreo extends JFrame {
         for (int i = 0; i < clusterManager.getCantidadActual(); i++) {
             Computador nodo = nodos[i];
             if (nodo != null) {
-                // Verificar si el proceso en CPU acaba de terminar en este ciclo
                 Proceso activoPrevio = nodo.getCpu().getProcesoActual();
+                int terminadosPrevio = (nodo.getColaTerminados() != null) ? nodo.getColaTerminados().getTamaño() : 0;
 
-                // Algoritmo de Despacho (Dispatcher)
-                if (!nodo.getCpu().isOcupado() && nodo.tieneProcesosEnEspera()) {
-                    Proceso p = nodo.despacharSiguiente();
-                    if (p != null) {
-                        p.setEstado(EstadoProceso.EJECUCION);
-                        nodo.getCpu().cargarProceso(p);
-                        eventLog.registrar(cicloRelojGlobal, nodo.getNombre() + ": Proceso " + p.getNombre() + " despachado a CPU bajo política (" + nodo.getNombrePoliticaActual() + ").");
-                    }
-                }
-
-                // Ejecutar un ciclo de la CPU
+                // Delegar la ejecución del ciclo completamente al objeto Computador
                 nodo.tick(cicloRelojGlobal);
 
-                // Si la CPU se liberó tras el tick, el proceso finalizó
-                if (activoPrevio != null && nodo.getCpu().getProcesoActual() == null) {
-                    activoPrevio.setEstado(EstadoProceso.TERMINADO);
-                    if (i < colasTerminados.length && colasTerminados[i] != null) {
-                        colasTerminados[i].encolar(activoPrevio);
+                Proceso activoActual = nodo.getCpu().getProcesoActual();
+                int terminadosActual = (nodo.getColaTerminados() != null) ? nodo.getColaTerminados().getTamaño() : 0;
+
+                // Evento: Se despachó un proceso a la CPU
+                if (activoPrevio != activoActual && activoActual != null) {
+                    eventLog.registrar(cicloRelojGlobal, nodo.getNombre() + ": Proceso " + activoActual.getNombre() + 
+                        " en ejecución en CPU bajo política (" + nodo.getNombrePoliticaActual() + ").");
+                }
+
+                // Evento: Un proceso finalizó su ejecución
+                if (terminadosActual > terminadosPrevio) {
+                    Proceso ultimoTerminado = (Proceso) nodo.getColaTerminados().obtener(terminadosActual - 1);
+                    if (ultimoTerminado != null) {
+                        int tiempoRespuesta = cicloRelojGlobal - ultimoTerminado.getTiempoLlegada();
+                        boolean cumplioDeadline = (ultimoTerminado.getDeadline() <= 0) || (cicloRelojGlobal <= ultimoTerminado.getDeadline());
+                        metricasService.registrarProcesoTerminado(tiempoRespuesta, cumplioDeadline);
+                        eventLog.registrar(cicloRelojGlobal, nodo.getNombre() + ": Proceso " + ultimoTerminado.getNombre() + " ha FINALIZADO su ejecución.");
                     }
-                    int tiempoRespuesta = cicloRelojGlobal - activoPrevio.getTiempoLlegada();
-                    boolean cumplioDeadline = cicloRelojGlobal <= activoPrevio.getDeadline();
-                    metricasService.registrarProcesoTerminado(tiempoRespuesta, cumplioDeadline);
-                    eventLog.registrar(cicloRelojGlobal, nodo.getNombre() + ": Proceso " + activoPrevio.getNombre() + " ha FINALIZADO su ejecución.");
                 }
             }
         }
@@ -399,22 +387,74 @@ public class Vista2Monitoreo extends JFrame {
         JPanel panel = new JPanel(new GridLayout(2, 2, 8, 8));
         panel.setOpaque(false);
 
-        // 1. Obtener procesos en Cola Nuevos
-        int numNuevos = (nodo.getColaNuevos() != null) ? nodo.getColaNuevos().getTamaño() : 0;
-        String textoNuevos = (numNuevos > 0) ? "En espera: " + numNuevos + " proc." : "Sin procesos";
+        // 1. Cola Nuevos
+        ColaProcesos colaNuevos = nodo.getColaNuevos();
+        int numNuevos = (colaNuevos != null) ? colaNuevos.getTamaño() : 0;
+        StringBuilder sbNuevos = new StringBuilder();
+        if (numNuevos > 0) {
+            for (int k = 0; k < numNuevos; k++) {
+                Proceso p = (Proceso) colaNuevos.obtener(k);
+                if (p != null) {
+                    if (k > 0) sbNuevos.append("\n");
+                    sbNuevos.append("• ").append(p.getNombre());
+                }
+            }
+        } else {
+            sbNuevos.append("Sin procesos");
+        }
 
-        // 2. Obtener procesos en Cola Listos
-        int numProcesosCola = (nodo.getColaProcesos() != null) ? nodo.getColaProcesos().getTamaño() : 0;
-        String textoListos = (numProcesosCola > 0) ? "En cola: " + numProcesosCola + " proc." : "Sin procesos";
+        // 2. Cola Listos (Consulta la cola efectiva del planificador activo)
+        ColaProcesos colaListos = nodo.getColaListosEfectiva();
+        int numListos = (colaListos != null) ? colaListos.getTamaño() : 0;
+        StringBuilder sbListos = new StringBuilder();
+        if (numListos > 0) {
+            for (int k = 0; k < numListos; k++) {
+                Proceso p = (Proceso) colaListos.obtener(k);
+                if (p != null) {
+                    if (k > 0) sbListos.append("\n");
+                    sbListos.append("• ").append(p.getNombre());
+                }
+            }
+        } else {
+            sbListos.append("Sin procesos");
+        }
 
-        // 3. Obtener procesos en Cola Terminados
-        int numTerminados = (indiceNodo < colasTerminados.length && colasTerminados[indiceNodo] != null) ? colasTerminados[indiceNodo].getTamaño() : 0;
-        String textoTerminados = (numTerminados > 0) ? "Finalizados: " + numTerminados : "Ninguno";
+        // 3. Cola Bloqueados (Lectura dinámica de bloqueos por semáforo)
+        ColaProcesos colaBloq = nodo.getColaBloqueados();
+        int numBloqueados = (colaBloq != null) ? colaBloq.getTamaño() : 0;
+        StringBuilder sbBloqueados = new StringBuilder();
+        if (numBloqueados > 0) {
+            for (int k = 0; k < numBloqueados; k++) {
+                Proceso p = (Proceso) colaBloq.obtener(k);
+                if (p != null) {
+                    if (k > 0) sbBloqueados.append("\n");
+                    sbBloqueados.append("• ").append(p.getNombre()).append(" [").append(p.getTipo()).append("]");
+                }
+            }
+        } else {
+            sbBloqueados.append("Sin bloqueos");
+        }
 
-        panel.add(crearCajaCola("Cola Nuevos (" + numNuevos + ")", textoNuevos, COLOR_PRIMARY));
-        panel.add(crearCajaCola("Cola Listos (" + numProcesosCola + ")", textoListos, COLOR_SUCCESS));
-        panel.add(crearCajaCola("Cola Bloqueados", "Sin bloqueos", COLOR_DANGER));
-        panel.add(crearCajaCola("Cola Terminados (" + numTerminados + ")", textoTerminados, COLOR_SECONDARY));
+        // 4. Cola Terminados
+        ColaProcesos colaTerm = nodo.getColaTerminados();
+        int numTerminados = (colaTerm != null) ? colaTerm.getTamaño() : 0;
+        StringBuilder sbTerminados = new StringBuilder();
+        if (numTerminados > 0) {
+            for (int k = 0; k < numTerminados; k++) {
+                Proceso p = (Proceso) colaTerm.obtener(k);
+                if (p != null) {
+                    if (k > 0) sbTerminados.append("\n");
+                    sbTerminados.append("• ").append(p.getNombre());
+                }
+            }
+        } else {
+            sbTerminados.append("Ninguno");
+        }
+
+        panel.add(crearCajaCola("Cola Nuevos (" + numNuevos + ")", sbNuevos.toString(), COLOR_PRIMARY));
+        panel.add(crearCajaCola("Cola Listos (" + numListos + ")", sbListos.toString(), COLOR_SUCCESS));
+        panel.add(crearCajaCola("Cola Bloqueados (" + numBloqueados + ")", sbBloqueados.toString(), COLOR_DANGER));
+        panel.add(crearCajaCola("Cola Terminados (" + numTerminados + ")", sbTerminados.toString(), COLOR_SECONDARY));
 
         return panel;
     }
@@ -546,12 +586,9 @@ public class Vista2Monitoreo extends JFrame {
     }
 
     public static void main(String[] args) {
-        SwingUtilities.invokeLater(new Runnable() {
-            @Override
-            public void run() {
-                Vista2Monitoreo vista = new Vista2Monitoreo();
-                vista.setVisible(true);
-            }
+        SwingUtilities.invokeLater(() -> {
+            Vista2Monitoreo vista = new Vista2Monitoreo();
+            vista.setVisible(true);
         });
     }
 }

@@ -41,4 +41,9 @@ public class PlanificadorFCFS implements Planificador {
     public int getCantidadProcesos() {
         return (colaListos != null) ? colaListos.getTamaño() : 0;
     }
+    
+    @Override
+    public ColaProcesos getCola() {
+        return this.colaListos;
+    }
 }

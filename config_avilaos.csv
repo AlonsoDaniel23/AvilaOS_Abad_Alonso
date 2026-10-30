@@ -1,0 +1,7 @@
+# CONFIGURACION GLOBAL AVILAOS
+DuracionCicloMs,1000
+LatenciaRedCiclos,2
+CantidadComputadores,2
+# NODOS DE COMPUTO (ID,Nombre,RAM_KB,Swap_KB)
+1,Computador 1,1024,2048
+2,Computador 2,1024,2048

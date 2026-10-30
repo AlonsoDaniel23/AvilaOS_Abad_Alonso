@@ -11,6 +11,7 @@ import avilaos.services.MetricasService;
  */
 public class BufferCircular {
     
+    private String nombre;
     private Proceso[] buffer;
     private int entrada;
     private int salida;
@@ -22,12 +23,10 @@ public class BufferCircular {
     private MetricasService metricas;
 
     /**
-     * Constructor para inicializar el buffer acotado con sincronizacion por semaforos.
-     * 
-     * @param capacidad Tamaño maximo del buffer.
-     * @param metricas Instancia global de MetricasService para auditoria.
+     * Constructor con nombre explícito del buffer.
      */
-    public BufferCircular(int capacidad, MetricasService metricas) {
+    public BufferCircular(String nombre, int capacidad, MetricasService metricas) {
+        this.nombre = (nombre != null && !nombre.isEmpty()) ? nombre : "B1";
         this.capacidad = capacidad;
         this.buffer = new Proceso[capacidad];
         this.entrada = 0;
@@ -40,11 +39,22 @@ public class BufferCircular {
     }
 
     /**
-     * Inserta un nuevo proceso producido en el buffer circular.
-     * 
-     * @param proceso Proceso a encolar.
+     * Constructor base de compatibilidad.
      */
-    public void producir(Proceso proceso) {
+    public BufferCircular(int capacidad, MetricasService metricas) {
+        this("B1", capacidad, metricas);
+    }
+
+    /**
+     * Inserta un nuevo proceso producido en el buffer circular.
+     * @return true si produjo exitosamente; false si el semáforo 'espacios' bloqueó el proceso.
+     */
+    public boolean producir(Proceso proceso) {
+        // Verifica si hay espacio libre en el semáforo de espacios
+        if (espacios.getValor() <= 0) {
+            return false; // El buffer está lleno: el proceso debe pasar a Cola Bloqueados
+        }
+
         espacios.waitSemaforo();
         mutex.waitSemaforo();
 
@@ -57,14 +67,44 @@ public class BufferCircular {
 
         mutex.signalSemaforo();
         items.signalSemaforo();
+        
+        return true;
     }
 
     /**
-     * Extrae un proceso consumido del buffer circular.
-     * 
-     * @return El proceso consumido.
+     * Extrae un proceso consumido del buffer circular pasando el proceso consumidor.
+     * @return true si consumió exitosamente; false si el semáforo 'items' bloqueó el proceso.
+     */
+    public boolean consumir(Proceso proceso) {
+        // Verifica si hay elementos disponibles en el semáforo de ítems
+        if (items.getValor() <= 0) {
+            return false; // El buffer está vacío: el proceso debe pasar a Cola Bloqueados
+        }
+
+        items.waitSemaforo();
+        mutex.waitSemaforo();
+
+        Proceso pExtraido = buffer[salida];
+        buffer[salida] = null;
+        salida = (salida + 1) % capacidad;
+
+        if (metricas != null) {
+            metricas.registrarConsumo();
+        }
+
+        mutex.signalSemaforo();
+        espacios.signalSemaforo();
+
+        return true;
+    }
+
+    /**
+     * Sobrecarga de extracción directa.
      */
     public Proceso consumir() {
+        if (items.getValor() <= 0) {
+            return null;
+        }
         items.waitSemaforo();
         mutex.waitSemaforo();
 
@@ -82,7 +122,28 @@ public class BufferCircular {
         return proceso;
     }
 
+    // Getters y Setters
+    public String getNombre() {
+        return nombre;
+    }
+
+    public void setNombre(String nombre) {
+        this.nombre = nombre;
+    }
+
     public int getCapacidad() {
         return capacidad;
+    }
+
+    public Semaforo getMutex() {
+        return mutex;
+    }
+
+    public Semaforo getItems() {
+        return items;
+    }
+
+    public Semaforo getEspacios() {
+        return espacios;
     }
 }

@@ -51,4 +51,9 @@ public class PlanificadorRR implements Planificador {
     public int getCantidadProcesos() {
         return (colaListos != null) ? colaListos.getTamaño() : 0;
     }
+    
+    @Override
+    public ColaProcesos getCola() {
+        return this.colaListos;
+    }
 }

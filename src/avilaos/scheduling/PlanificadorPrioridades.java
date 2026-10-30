@@ -1,5 +1,6 @@
 package avilaos.scheduling;
 
+import avilaos.datastructures.ColaProcesos;
 import avilaos.datastructures.ListaEnlazada;
 import avilaos.model.Proceso;
 
@@ -60,5 +61,19 @@ public class PlanificadorPrioridades implements Planificador {
     @Override
     public int getCantidadProcesos() {
         return (listaProcesos != null) ? listaProcesos.getTamaño() : 0;
+    }
+    
+    @Override
+    public ColaProcesos getCola() {
+        ColaProcesos cola = new ColaProcesos();
+        if (listaProcesos != null) {
+            for (int i = 0; i < listaProcesos.getTamaño(); i++) {
+                Object elem = listaProcesos.obtener(i);
+                if (elem != null) {
+                    cola.encolar(elem);
+                }
+            }
+        }
+        return cola;
     }
 }

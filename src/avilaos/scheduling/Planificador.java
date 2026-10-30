@@ -1,5 +1,6 @@
 package avilaos.scheduling;
 
+import avilaos.datastructures.ColaProcesos;
 import avilaos.model.Proceso;
 
 /**
@@ -37,4 +38,12 @@ public interface Planificador {
      * @return Cantidad de procesos en la cola interna.
      */
     int getCantidadProcesos();
+    
+    /**
+     * Retorna la cola interna de procesos listos del planificador.
+     * 
+     * @return Estructura ColaProcesos con los procesos en espera.
+     */
+    ColaProcesos getCola();
+    
 }

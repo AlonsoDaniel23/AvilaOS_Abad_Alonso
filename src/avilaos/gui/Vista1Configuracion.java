@@ -4,12 +4,14 @@
  */
 package avilaos.gui;
 
+import avilaos.enums.TipoProceso;
 import avilaos.model.ClusterManager;
 import avilaos.model.Computador;
 import avilaos.model.Proceso;
 import avilaos.persistence.GestorPersistencia;
 import avilaos.services.EventLog;
 import avilaos.services.MetricasService;
+import avilaos.synchronization.BufferCircular;
 
 import javax.swing.*;
 import javax.swing.border.*;
@@ -21,7 +23,7 @@ import java.awt.event.ActionEvent;
  * y declaracion de buffers compartidos (Requerimientos 6 y 7).
  * 
  * @author Daniel Alonso
- * @version 2.1
+ * @version 2.2
  */
 public class Vista1Configuracion extends JFrame {
     
@@ -33,6 +35,7 @@ public class Vista1Configuracion extends JFrame {
     // Componentes de Creacion de Procesos
     private JTextField txtNombreProceso;
     private JComboBox<String> comboTipoProceso;
+    private JTextField txtBufferAsociado; // <--- Agregado
     private JTextField txtRamProceso;
     private JTextField txtPrioridadProceso;
     private JTextField txtDeadlineProceso;
@@ -89,7 +92,7 @@ public class Vista1Configuracion extends JFrame {
 
     private void configurarVentana() {
         this.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
-        this.setSize(1050, 680);
+        this.setSize(1050, 720);
         this.setLocationRelativeTo(null);
         this.getContentPane().setBackground(COLOR_BG);
         this.setLayout(new BorderLayout(0, 0));
@@ -181,7 +184,6 @@ public class Vista1Configuracion extends JFrame {
         comboNumComputadores = new JComboBox<>(new String[]{"2 Computadores", "3 Computadores", "4 Computadores"});
         estilizarComboBox(comboNumComputadores);
 
-        // Listener para reconfigurar la cantidad de nodos dinámicamente
         comboNumComputadores.addActionListener(e -> actualizarCantidadNodos());
 
         agregarFilaFormulario(panel, "Duración Ciclo (ms):", txtDuracionCiclo, gbc, 1);
@@ -204,13 +206,11 @@ public class Vista1Configuracion extends JFrame {
             else if (seleccion.contains("4")) numNodos = 4;
         }
 
-        // Reconstruir el clusterManager con el número seleccionado
         this.clusterManager = new ClusterManager(numNodos);
         for (int i = 1; i <= numNodos; i++) {
             this.clusterManager.agregarComputador(new Computador(i, "Computador " + i, 1024, 2048));
         }
 
-        // Actualizar selector de nodo destino
         if (comboNodoDestino != null) {
             comboNodoDestino.removeAllItems();
             comboNodoDestino.addItem("Asignación Automática");
@@ -219,7 +219,6 @@ public class Vista1Configuracion extends JFrame {
             }
         }
 
-        // Actualizar selector de nodo anfitrión de buffers
         if (comboNodoAnfitrion != null) {
             comboNodoAnfitrion.removeAllItems();
             for (int i = 1; i <= numNodos; i++) {
@@ -241,6 +240,9 @@ public class Vista1Configuracion extends JFrame {
         txtNombreProceso = crearCampoTexto("P1");
         comboTipoProceso = new JComboBox<>(new String[]{"CPU Bound", "I/O Bound", "Productor", "Consumidor"});
         estilizarComboBox(comboTipoProceso);
+        
+        txtBufferAsociado = crearCampoTexto("B1"); // <--- Campo para especificar el buffer
+        
         txtRamProceso = crearCampoTexto("128");
         txtPrioridadProceso = crearCampoTexto("1");
         txtDeadlineProceso = crearCampoTexto("20");
@@ -253,13 +255,14 @@ public class Vista1Configuracion extends JFrame {
 
         agregarFilaFormulario(panel, "Nombre Proceso:", txtNombreProceso, gbc, 1);
         agregarFilaFormulario(panel, "Tipo:", comboTipoProceso, gbc, 2);
-        agregarFilaFormulario(panel, "RAM (KB):", txtRamProceso, gbc, 3);
-        agregarFilaFormulario(panel, "Prioridad (1-5):", txtPrioridadProceso, gbc, 4);
-        agregarFilaFormulario(panel, "Deadline (Ciclos):", txtDeadlineProceso, gbc, 5);
-        agregarFilaFormulario(panel, "Ciclos Requeridos:", txtCiclosProceso, gbc, 6);
-        agregarFilaFormulario(panel, "Nodo Destino:", comboNodoDestino, gbc, 7);
+        agregarFilaFormulario(panel, "Buffer Asociado:", txtBufferAsociado, gbc, 3); // <--- Agregado a la interfaz
+        agregarFilaFormulario(panel, "RAM (KB):", txtRamProceso, gbc, 4);
+        agregarFilaFormulario(panel, "Prioridad (1-5):", txtPrioridadProceso, gbc, 5);
+        agregarFilaFormulario(panel, "Deadline (Ciclos):", txtDeadlineProceso, gbc, 6);
+        agregarFilaFormulario(panel, "Ciclos Requeridos:", txtCiclosProceso, gbc, 7);
+        agregarFilaFormulario(panel, "Nodo Destino:", comboNodoDestino, gbc, 8);
 
-        gbc.gridx = 0; gbc.gridy = 8; gbc.gridwidth = 2;
+        gbc.gridx = 0; gbc.gridy = 9; gbc.gridwidth = 2;
         gbc.insets = new Insets(15, 0, 0, 0);
         panel.add(btnAgregar, gbc);
 
@@ -272,8 +275,8 @@ public class Vista1Configuracion extends JFrame {
 
         agregarTituloTarjeta(panel, "3. Buffer Compartido", gbc);
 
-        txtNombreBuffer = crearCampoTexto("Buffer_B1");
-        txtCapacidadBuffer = crearCampoTexto("5");
+        txtNombreBuffer = crearCampoTexto("B1");
+        txtCapacidadBuffer = crearCampoTexto("1");
         comboNodoAnfitrion = new JComboBox<>(new String[]{"Nodo 1", "Nodo 2"});
         estilizarComboBox(comboNodoAnfitrion);
 
@@ -299,7 +302,7 @@ public class Vista1Configuracion extends JFrame {
         gbc.gridy = fila;
         gbc.weightx = 0.4;
         gbc.fill = GridBagConstraints.HORIZONTAL;
-        gbc.insets = new Insets(4, 0, 4, 10);
+        gbc.insets = new Insets(3, 0, 3, 10);
 
         JLabel lbl = new JLabel(etiqueta);
         lbl.setFont(new Font("Segoe UI", Font.PLAIN, 12));
@@ -309,14 +312,14 @@ public class Vista1Configuracion extends JFrame {
 
         gbc.gridx = 1;
         gbc.weightx = 0.6;
-        gbc.insets = new Insets(4, 0, 4, 0);
+        gbc.insets = new Insets(3, 0, 3, 0);
         panel.add(comp, gbc);
     }
 
     private JTextField crearCampoTexto(String textoPorDefecto) {
         JTextField txt = new JTextField(textoPorDefecto);
         txt.setFont(new Font("Segoe UI", Font.PLAIN, 12));
-        txt.setPreferredSize(new Dimension(130, 28));
+        txt.setPreferredSize(new Dimension(130, 26));
         txt.setBorder(BorderFactory.createCompoundBorder(
                 BorderFactory.createLineBorder(COLOR_BORDER, 1),
                 BorderFactory.createEmptyBorder(2, 6, 2, 6)
@@ -326,7 +329,7 @@ public class Vista1Configuracion extends JFrame {
 
     private void estilizarComboBox(JComboBox<?> combo) {
         combo.setFont(new Font("Segoe UI", Font.PLAIN, 12));
-        combo.setPreferredSize(new Dimension(130, 28));
+        combo.setPreferredSize(new Dimension(130, 26));
         combo.setBackground(Color.WHITE);
     }
 
@@ -355,7 +358,7 @@ public class Vista1Configuracion extends JFrame {
         btn.setBorderPainted(false);
         btn.setFocusPainted(false);
         btn.setCursor(new Cursor(Cursor.HAND_CURSOR));
-        btn.setPreferredSize(new Dimension(btn.getPreferredSize().width, 36));
+        btn.setPreferredSize(new Dimension(btn.getPreferredSize().width, 34));
         btn.setBorder(BorderFactory.createEmptyBorder(6, 16, 6, 16));
 
         return btn;
@@ -380,14 +383,39 @@ public class Vista1Configuracion extends JFrame {
                 return;
             }
 
-            // Calcular total de páginas según la RAM (4 KB por marco)
+            // Mapear el combo de tipo a TipoProceso
+            String tipoSeleccionado = comboTipoProceso.getSelectedItem().toString();
+            TipoProceso tipoEnum = TipoProceso.CPU_BOUND;
+            if (tipoSeleccionado.equalsIgnoreCase("I/O Bound")) {
+                tipoEnum = TipoProceso.IO_BOUND;
+            } else if (tipoSeleccionado.equalsIgnoreCase("Productor")) {
+                tipoEnum = TipoProceso.PRODUCTOR;
+            } else if (tipoSeleccionado.equalsIgnoreCase("Consumidor")) {
+                tipoEnum = TipoProceso.CONSUMIDOR;
+            }
+
+            // Nombre del buffer
+            String nombreBuffer = txtBufferAsociado.getText().trim();
+            if (nombreBuffer.isEmpty()) {
+                nombreBuffer = "B1";
+            }
+
             int totalPaginas = Math.max(1, ram / 4);
 
-            // Instanciación usando el constructor de 6 parámetros de Proceso.java
-            Proceso nuevoProceso = new Proceso(contadorProcesosId++, 0, nombre, prioridad, ciclos, totalPaginas);
+            // Instanciación con constructor completo que recibe tipo y buffer
+            Proceso nuevoProceso = new Proceso(
+                contadorProcesosId++, 
+                0, 
+                nombre, 
+                prioridad, 
+                ciclos, 
+                totalPaginas, 
+                tipoEnum, 
+                nombreBuffer
+            );
             nuevoProceso.setDeadline(deadline);
 
-            // Asignación dinámica de nodo por ID
+            // Asignación de nodo
             String dest = (String) comboNodoDestino.getSelectedItem();
             Computador nodoDestino = null;
 
@@ -404,8 +432,8 @@ public class Vista1Configuracion extends JFrame {
 
             if (nodoDestino != null) {
                 nodoDestino.encolarProceso(nuevoProceso);
-                eventLog.registrar(0, "Proceso " + nombre + " (" + ram + " KB, " + ciclos + " ciclos) asignado a " + nodoDestino.getNombre());
-                JOptionPane.showMessageDialog(this, "Proceso '" + nombre + "' asignado a " + nodoDestino.getNombre() + " con éxito.", "Proceso Creado", JOptionPane.INFORMATION_MESSAGE);
+                eventLog.registrar(0, "Proceso " + nombre + " [" + tipoEnum + "] asignado a " + nodoDestino.getNombre() + " (Buffer: " + nombreBuffer + ")");
+                JOptionPane.showMessageDialog(this, "Proceso '" + nombre + "' (" + tipoEnum + ") asignado a " + nodoDestino.getNombre() + " con éxito.", "Proceso Creado", JOptionPane.INFORMATION_MESSAGE);
             } else {
                 JOptionPane.showMessageDialog(this, "No hay nodos disponibles para asignar el proceso.", "Error", JOptionPane.ERROR_MESSAGE);
             }
@@ -428,8 +456,12 @@ public class Vista1Configuracion extends JFrame {
                 return;
             }
 
-            eventLog.registrar(0, "Buffer " + nombre + " creado en " + comboNodoAnfitrion.getSelectedItem());
-            JOptionPane.showMessageDialog(this, "Buffer '" + nombre + "' configurado correctamente.", "Buffer Creado", JOptionPane.INFORMATION_MESSAGE);
+            // INSTANCIAR Y REGISTRAR EL BUFFER EN EL CLUSTERMANAGER Y SINGLETON
+            BufferCircular nuevoBuffer = new BufferCircular(nombre, capacidad, metricasService);
+            clusterManager.registrarBuffer(nuevoBuffer);
+
+            eventLog.registrar(0, "Buffer " + nombre + " (Capacidad: " + capacidad + ") creado en " + comboNodoAnfitrion.getSelectedItem());
+            JOptionPane.showMessageDialog(this, "Buffer '" + nombre + "' configurado y registrado con éxito.", "Buffer Creado", JOptionPane.INFORMATION_MESSAGE);
 
         } catch (NumberFormatException ex) {
             JOptionPane.showMessageDialog(this, "La capacidad debe ser un número entero válido.", "Error de Entrada", JOptionPane.ERROR_MESSAGE);
@@ -466,7 +498,6 @@ public class Vista1Configuracion extends JFrame {
 
         eventLog.registrar(0, "Configuración completada. Transicionando a la Vista de Monitoreo.");
 
-        // Abrir la Vista 2 con la instancia real de los módulos
         Vista2Monitoreo vista2 = new Vista2Monitoreo(this.clusterManager, this.eventLog, this.metricasService);
         vista2.setVisible(true);
 
@@ -480,12 +511,9 @@ public class Vista1Configuracion extends JFrame {
     public MetricasService getMetricasService() { return metricasService; }
 
     public static void main(String[] args) {
-        SwingUtilities.invokeLater(new Runnable() {
-            @Override
-            public void run() {
-                Vista1Configuracion vista = new Vista1Configuracion();
-                vista.setVisible(true);
-            }
+        SwingUtilities.invokeLater(() -> {
+            Vista1Configuracion vista = new Vista1Configuracion();
+            vista.setVisible(true);
         });
     }
 }
