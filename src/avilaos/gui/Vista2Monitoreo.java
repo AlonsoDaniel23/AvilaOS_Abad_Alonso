@@ -140,12 +140,12 @@ public class Vista2Monitoreo extends JFrame {
                 Proceso activoPrevio = nodo.getCpu().getProcesoActual();
 
                 // Algoritmo de Despacho (Dispatcher)
-                if (!nodo.getCpu().isOcupado() && !nodo.getColaProcesos().estaVacia()) {
-                    Proceso p = (Proceso) nodo.getColaProcesos().desencolar();
+                if (!nodo.getCpu().isOcupado() && nodo.tieneProcesosEnEspera()) {
+                    Proceso p = nodo.despacharSiguiente();
                     if (p != null) {
                         p.setEstado(EstadoProceso.EJECUCION);
                         nodo.getCpu().cargarProceso(p);
-                        eventLog.registrar(cicloRelojGlobal, nodo.getNombre() + ": Proceso " + p.getNombre() + " despachado a CPU.");
+                        eventLog.registrar(cicloRelojGlobal, nodo.getNombre() + ": Proceso " + p.getNombre() + " despachado a CPU bajo política (" + nodo.getNombrePoliticaActual() + ").");
                     }
                 }
 
@@ -251,11 +251,13 @@ public class Vista2Monitoreo extends JFrame {
         lblNombreNodo.setForeground(COLOR_TEXT_HEADER);
 
         JComboBox<String> comboPolitica = new JComboBox<>(new String[]{"FCFS", "Round Robin", "EDF", "Prioridades"});
+        comboPolitica.setSelectedItem(nodo.getNombrePoliticaActual());
         comboPolitica.setFont(new Font("Segoe UI", Font.PLAIN, 11));
         comboPolitica.setBackground(Color.WHITE);
         comboPolitica.addActionListener(e -> {
             String seleccion = (String) comboPolitica.getSelectedItem();
-            eventLog.registrar(cicloRelojGlobal, nodo.getNombre() + ": Política cambiada a " + seleccion);
+            nodo.cambiarPolitica(seleccion);
+            eventLog.registrar(cicloRelojGlobal, nodo.getNombre() + ": Política de planificación cambiada activamente a " + seleccion);
             actualizarVisorLogs();
         });
 
