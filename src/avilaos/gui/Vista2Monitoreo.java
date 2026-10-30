@@ -399,13 +399,19 @@ public class Vista2Monitoreo extends JFrame {
         JPanel panel = new JPanel(new GridLayout(2, 2, 8, 8));
         panel.setOpaque(false);
 
-        int numProcesosCola = (nodo.getColaProcesos() != null) ? nodo.getColaProcesos().getTamaño() : 0;
-        String textoListos = (numProcesosCola > 0) ? "En cola: " + numProcesosCola + " proceso(s)" : "Sin procesos";
+        // 1. Obtener procesos en Cola Nuevos
+        int numNuevos = (nodo.getColaNuevos() != null) ? nodo.getColaNuevos().getTamaño() : 0;
+        String textoNuevos = (numNuevos > 0) ? "En espera: " + numNuevos + " proc." : "Sin procesos";
 
+        // 2. Obtener procesos en Cola Listos
+        int numProcesosCola = (nodo.getColaProcesos() != null) ? nodo.getColaProcesos().getTamaño() : 0;
+        String textoListos = (numProcesosCola > 0) ? "En cola: " + numProcesosCola + " proc." : "Sin procesos";
+
+        // 3. Obtener procesos en Cola Terminados
         int numTerminados = (indiceNodo < colasTerminados.length && colasTerminados[indiceNodo] != null) ? colasTerminados[indiceNodo].getTamaño() : 0;
         String textoTerminados = (numTerminados > 0) ? "Finalizados: " + numTerminados : "Ninguno";
 
-        panel.add(crearCajaCola("Cola Nuevos", "Sin procesos", COLOR_PRIMARY));
+        panel.add(crearCajaCola("Cola Nuevos (" + numNuevos + ")", textoNuevos, COLOR_PRIMARY));
         panel.add(crearCajaCola("Cola Listos (" + numProcesosCola + ")", textoListos, COLOR_SUCCESS));
         panel.add(crearCajaCola("Cola Bloqueados", "Sin bloqueos", COLOR_DANGER));
         panel.add(crearCajaCola("Cola Terminados (" + numTerminados + ")", textoTerminados, COLOR_SECONDARY));

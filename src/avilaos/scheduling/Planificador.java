@@ -30,4 +30,11 @@ public interface Planificador {
      * @return true si hay procesos pendientes, false en caso contrario.
      */
     boolean hayProcesos();
+    
+    /**
+     * Retorna el número total de procesos listos actualmente en espera.
+     * 
+     * @return Cantidad de procesos en la cola interna.
+     */
+    int getCantidadProcesos();
 }

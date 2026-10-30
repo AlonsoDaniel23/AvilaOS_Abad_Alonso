@@ -36,4 +36,9 @@ public class PlanificadorFCFS implements Planificador {
     public boolean hayProcesos() {
         return !colaListos.estaVacia();
     }
+    
+    @Override
+    public int getCantidadProcesos() {
+        return (colaListos != null) ? colaListos.getTamaño() : 0;
+    }
 }

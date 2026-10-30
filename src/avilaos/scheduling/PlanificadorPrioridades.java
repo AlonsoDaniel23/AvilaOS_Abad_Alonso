@@ -56,4 +56,9 @@ public class PlanificadorPrioridades implements Planificador {
     public boolean hayProcesos() {
         return !listaProcesos.estaVacia();
     }
+    
+    @Override
+    public int getCantidadProcesos() {
+        return (listaProcesos != null) ? listaProcesos.getTamaño() : 0;
+    }
 }

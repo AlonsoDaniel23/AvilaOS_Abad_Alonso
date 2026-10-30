@@ -46,4 +46,9 @@ public class PlanificadorRR implements Planificador {
     public int getQuantum() {
         return quantum;
     }
+    
+    @Override
+    public int getCantidadProcesos() {
+        return (colaListos != null) ? colaListos.getTamaño() : 0;
+    }
 }

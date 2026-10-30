@@ -23,6 +23,7 @@ public class Computador implements IRelojListener {
     private final CPU cpu;
     private final MemoriaRAM ram;
     private final DiscoSwap discoSwap;
+    private final ColaProcesos colaNuevos;
     private final ColaProcesos colaProcesos;
     private Planificador planificador;
     private String nombrePoliticaActual;
@@ -33,11 +34,50 @@ public class Computador implements IRelojListener {
         this.cpu = new CPU(idComputador);
         this.ram = new MemoriaRAM(tamanioRamKB, 4); // Marcos de 4KB por defecto
         this.discoSwap = new DiscoSwap(tamanioSwapKB, 4); // Bloques de 4KB por defecto
+        this.colaNuevos = new ColaProcesos();
         this.colaProcesos = new ColaProcesos();
         
         // Política de planificación por defecto (FCFS)
         this.planificador = new PlanificadorFCFS();
         this.nombrePoliticaActual = "FCFS";
+    }
+
+    /**
+     * Encola un nuevo proceso. Ingresa a la Cola de Nuevos e intenta asignar RAM.
+     * @param proceso Proceso a agregar.
+     */
+    public void encolarProceso(Proceso proceso) {
+        if (proceso != null) {
+            proceso.setEstado(EstadoProceso.NUEVO);
+            this.colaNuevos.encolar(proceso);
+            revisarColaNuevos(); // Asigna RAM si hay espacio disponible
+        }
+    }
+
+    /**
+     * Revisa la Cola de Nuevos y traslada a la Cola de Listos aquellos procesos
+     * que dispongan de suficiente memoria RAM libre.
+     */
+    public void revisarColaNuevos() {
+        while (!colaNuevos.estaVacia()) {
+            Proceso p = (Proceso) colaNuevos.desencolar();
+            if (p != null) {
+                int paginas = (p.getTablaPaginas() != null) ? p.getTablaPaginas().length : 4;
+                if (ram.getMarcosLibres() >= paginas) {
+                    ram.asignarMemoriaProceso(p.getId(), paginas);
+                    p.setEstado(EstadoProceso.LISTO);
+                    if (planificador != null) {
+                        planificador.agregarProceso(p);
+                    } else {
+                        colaProcesos.encolar(p);
+                    }
+                } else {
+                    // No hay espacio suficiente en RAM: regresa a Cola Nuevos y detiene la admisión
+                    colaNuevos.encolar(p);
+                    break;
+                }
+            }
+        }
     }
 
     /**
@@ -66,7 +106,7 @@ public class Computador implements IRelojListener {
                 break;
         }
 
-        // Migrar procesos existentes de la cola actual al nuevo planificador
+        // Migrar procesos existentes al nuevo planificador
         while (tieneProcesosEnEspera()) {
             Proceso p = despacharSiguiente();
             if (p != null) {
@@ -76,21 +116,6 @@ public class Computador implements IRelojListener {
 
         this.planificador = nuevoPlanificador;
         this.nombrePoliticaActual = nuevaPolitica;
-    }
-
-    /**
-     * Encola un nuevo proceso preparado para ejecución en este nodo.
-     * @param proceso Proceso a agregar.
-     */
-    public void encolarProceso(Proceso proceso) {
-        if (proceso != null) {
-            proceso.setEstado(EstadoProceso.LISTO);
-            if (planificador != null) {
-                planificador.agregarProceso(proceso);
-            } else {
-                this.colaProcesos.encolar(proceso);
-            }
-        }
     }
 
     /**
@@ -104,9 +129,19 @@ public class Computador implements IRelojListener {
         }
         return null;
     }
+    
+    /**
+     * Retorna el número de procesos en espera dentro de la Cola de Listos o el Planificador activo.
+     */
+    public int getCantidadProcesosListos() {
+        if (planificador != null) {
+            return planificador.getCantidadProcesos();
+        }
+        return (colaProcesos != null) ? colaProcesos.getTamaño() : 0;
+    }
 
     /**
-     * Evalúa si hay procesos pendientes por ejecutar.
+     * Evalúa si hay procesos pendientes por ejecutar en estado LISTO.
      */
     public boolean tieneProcesosEnEspera() {
         if (planificador != null) {
@@ -122,11 +157,12 @@ public class Computador implements IRelojListener {
             procesoActual.ejecutarCiclo();
             cpu.incrementarPC();
 
-            // Si el proceso completó su tiempo requerido, se libera RAM y CPU
+            // Si el proceso completó su tiempo requerido, libera RAM y CPU, e intenta admitir nuevos
             if (procesoActual.esFinalizado()) {
                 procesoActual.setEstado(EstadoProceso.TERMINADO);
                 ram.liberarMemoriaProceso(procesoActual.getId());
                 cpu.liberar();
+                revisarColaNuevos(); // Evalúa admisión de procesos pendientes tras liberar memoria
             }
         }
     }
@@ -137,6 +173,7 @@ public class Computador implements IRelojListener {
     public CPU getCpu() { return cpu; }
     public MemoriaRAM getRam() { return ram; }
     public DiscoSwap getDiscoSwap() { return discoSwap; }
+    public ColaProcesos getColaNuevos() { return colaNuevos; }
     public ColaProcesos getColaProcesos() { return colaProcesos; }
     public Planificador getPlanificador() { return planificador; }
     public String getNombrePoliticaActual() { return nombrePoliticaActual; }
