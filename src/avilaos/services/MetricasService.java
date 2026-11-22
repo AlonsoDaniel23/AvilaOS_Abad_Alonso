@@ -5,41 +5,86 @@
 package avilaos.services;
 
 /**
- * Servicio encargado de recopilar y calcular métricas de rendimiento globales
- * (Throughput, utilizacion de procesadores, tasa de cumplimiento de deadlines y tiempos de respuesta).
- * Cumple con el Requerimiento 8 del proyecto sin librerías de java.util.
+ * Servicio encargado de recopilar y calcular metricas de rendimiento del sistema:
+ * CPU, Throughput, deadlines, E/S de disco (desplazamiento del cabezal y espera)
+ * e intercambio de memoria (Swap-Out / Swap-In), usando arreglos nativos sin java.util.
  * 
  * @author Daniel Alonso
  */
 public class MetricasService {
-    
-    private int procesosCompletadosTotales;
-    private int deadlinesIncumplidosTotales;
-    private int deadlinesCumplidosTotales;
-    private long acumuladoTiempoRespuesta;
-    private int elementosProducidosTotales;
-    private int elementosConsumidosTotales;
 
-    // Matriz de historial de uso de CPU: [idNodo][ciclo] = porcentajeUso (0 a 100)
-    private static final int MAX_NODOS = 10;
     private static final int MAX_CICLOS = 2000;
-    private final double[][] historialCpuNodos;
+
+    // Indices de politicas de disco: 0=FIFO, 1=SSTF, 2=SCAN, 3=C_SCAN
+    public static final int IDX_FIFO = 0;
+    public static final int IDX_SSTF = 1;
+    public static final int IDX_SCAN = 2;
+    public static final int IDX_CSCAN = 3;
+
+    // Metricas de CPU y Procesos
+    private int procesosCompletadosTotales;
+    private int deadlinesCumplidosTotales;
+    private int deadlinesIncumplidosTotales;
+    private long acumuladoTiempoRespuesta;
+    private final double[] historialUsoCpu;
+
+    // Metricas de Disco y Cabezal
+    private int desplazamientoTotalCabezal;
+    private int posicionActualCabezal;
+    private final int[] historialDesplazamientoCabezal;
+    private final int[] historialPosicionCabezal;
+    private int solicitudesESCompletadas;
+    private long acumuladoTiempoEsperaES;
+    private final int[] solicitudesPorPolitica;
+
+    // Metricas de Swap (Mediano Plazo)
+    private int totalSuspensiones;
+    private int totalReactivaciones;
+
     private int maxCicloRegistrado;
 
     public MetricasService() {
-        this.procesosCompletadosTotales = 0;
-        this.deadlinesIncumplidosTotales = 0;
-        this.deadlinesCumplidosTotales = 0;
-        this.acumuladoTiempoRespuesta = 0;
-        this.elementosProducidosTotales = 0;
-        this.elementosConsumidosTotales = 0;
-        this.historialCpuNodos = new double[MAX_NODOS][MAX_CICLOS];
-        this.maxCicloRegistrado = 0;
+        this.historialUsoCpu = new double[MAX_CICLOS];
+        this.historialDesplazamientoCabezal = new int[MAX_CICLOS];
+        this.historialPosicionCabezal = new int[MAX_CICLOS];
+        this.solicitudesPorPolitica = new int[4];
+        reiniciarMetricas();
     }
 
+    /**
+     * Reinicia todos los contadores e historiales al comenzar una nueva simulacion.
+     */
+    public synchronized void reiniciarMetricas() {
+        this.procesosCompletadosTotales = 0;
+        this.deadlinesCumplidosTotales = 0;
+        this.deadlinesIncumplidosTotales = 0;
+        this.acumuladoTiempoRespuesta = 0;
+
+        this.desplazamientoTotalCabezal = 0;
+        this.posicionActualCabezal = 0;
+        this.solicitudesESCompletadas = 0;
+        this.acumuladoTiempoEsperaES = 0;
+
+        this.totalSuspensiones = 0;
+        this.totalReactivaciones = 0;
+        this.maxCicloRegistrado = 0;
+
+        for (int i = 0; i < MAX_CICLOS; i++) {
+            historialUsoCpu[i] = 0.0;
+            historialDesplazamientoCabezal[i] = 0;
+            historialPosicionCabezal[i] = 0;
+        }
+        for (int i = 0; i < solicitudesPorPolitica.length; i++) {
+            solicitudesPorPolitica[i] = 0;
+        }
+    }
+
+    /**
+     * Registra las estadisticas de un proceso al culminar su ejecucion en CPU.
+     */
     public synchronized void registrarProcesoTerminado(int tiempoRespuesta, boolean cumplioDeadline) {
         this.procesosCompletadosTotales++;
-        this.acumuladoTiempoRespuesta += tiempoRespuesta;
+        this.acumuladoTiempoRespuesta += Math.max(0, tiempoRespuesta);
         if (cumplioDeadline) {
             this.deadlinesCumplidosTotales++;
         } else {
@@ -47,20 +92,18 @@ public class MetricasService {
         }
     }
 
-    public synchronized void registrarProduccion() {
-        this.elementosProducidosTotales++;
-    }
-
-    public synchronized void registrarConsumo() {
-        this.elementosConsumidosTotales++;
-    }
-
     /**
-     * Registra el uso instantáneo de la CPU de un nodo en un ciclo específico.
+     * Registra el estado instantaneo del sistema en un ciclo de reloj para las graficas.
      */
-    public synchronized void registrarUsoCpuNodo(int idNodo, int ciclo, double porcentajeUso) {
-        if (idNodo >= 1 && idNodo < MAX_NODOS && ciclo >= 0 && ciclo < MAX_CICLOS) {
-            historialCpuNodos[idNodo][ciclo] = porcentajeUso;
+    public synchronized void registrarEstadoCiclo(int ciclo, double porcentajeUsoCpu,
+            int posicionCabezal, int desplazamientoAcumulado) {
+        if (ciclo >= 0 && ciclo < MAX_CICLOS) {
+            this.historialUsoCpu[ciclo] = porcentajeUsoCpu;
+            this.posicionActualCabezal = posicionCabezal;
+            this.desplazamientoTotalCabezal = desplazamientoAcumulado;
+            this.historialPosicionCabezal[ciclo] = posicionCabezal;
+            this.historialDesplazamientoCabezal[ciclo] = desplazamientoAcumulado;
+
             if (ciclo > maxCicloRegistrado) {
                 maxCicloRegistrado = ciclo;
             }
@@ -68,41 +111,152 @@ public class MetricasService {
     }
 
     /**
-     * Obtiene el historial de utilización de CPU de un nodo particular.
+     * Registra el desplazamiento incremental del cabezal en un ciclo especifico.
      */
-    public synchronized double[] getHistorialCpuNodo(int idNodo) {
-        if (idNodo < 1 || idNodo >= MAX_NODOS) {
-            return new double[0];
+    public synchronized void registrarMovimientoCabezal(int ciclo, int bloquesRecorridos, int nuevaPosicion) {
+        if (bloquesRecorridos > 0) {
+            this.desplazamientoTotalCabezal += bloquesRecorridos;
         }
-        int tamanio = maxCicloRegistrado + 1;
-        double[] copia = new double[tamanio];
-        for (int c = 0; c < tamanio; c++) {
-            copia[c] = historialCpuNodos[idNodo][c];
+        this.posicionActualCabezal = nuevaPosicion;
+
+        if (ciclo >= 0 && ciclo < MAX_CICLOS) {
+            this.historialDesplazamientoCabezal[ciclo] = this.desplazamientoTotalCabezal;
+            this.historialPosicionCabezal[ciclo] = nuevaPosicion;
+            if (ciclo > maxCicloRegistrado) {
+                maxCicloRegistrado = ciclo;
+            }
         }
-        return copia;
     }
 
+    /**
+     * Contabiliza una solicitud de E/S atendida por el planificador de disco activo.
+     */
+    public synchronized void registrarSolicitudESAtendida(String politicaDisco, int tiempoEsperaEnCola) {
+        this.solicitudesESCompletadas++;
+        this.acumuladoTiempoEsperaES += Math.max(0, tiempoEsperaEnCola);
+
+        int idx = mapearIndicePolitica(politicaDisco);
+        if (idx >= 0 && idx < solicitudesPorPolitica.length) {
+            solicitudesPorPolitica[idx]++;
+        }
+    }
+
+    /**
+     * Registra una operacion de expulsion de memoria RAM hacia DiscoSwap (Swap-Out).
+     */
+    public synchronized void registrarSuspension() {
+        this.totalSuspensiones++;
+    }
+
+    /**
+     * Registra una operacion de reingreso desde DiscoSwap hacia memoria RAM (Swap-In).
+     */
+    public synchronized void registrarReactivacion() {
+        this.totalReactivaciones++;
+    }
+
+    /**
+     * Sincroniza los contadores de swapping con el PlanificadorMedianoPlazo.
+     */
+    public synchronized void sincronizarMetricasSwap(int suspensiones, int reactivaciones) {
+        this.totalSuspensiones = Math.max(0, suspensiones);
+        this.totalReactivaciones = Math.max(0, reactivaciones);
+    }
+
+    private int mapearIndicePolitica(String politica) {
+        if (politica == null) {
+            return IDX_FIFO;
+        }
+        String p = politica.trim().toUpperCase();
+        if (p.contains("SSTF")) {
+            return IDX_SSTF;
+        } else if (p.contains("C-SCAN") || p.contains("CSCAN") || p.contains("C_SCAN")) {
+            return IDX_CSCAN;
+        } else if (p.contains("SCAN")) {
+            return IDX_SCAN;
+        }
+        return IDX_FIFO;
+    }
+
+    // Calculos agregados
     public double calcularThroughput(int cicloActual) {
-        if (cicloActual <= 0) return 0.0;
+        if (cicloActual <= 0) {
+            return 0.0;
+        }
         return (double) procesosCompletadosTotales / cicloActual;
     }
 
     public double calcularTasaCumplimientoDeadlines() {
         int total = deadlinesCumplidosTotales + deadlinesIncumplidosTotales;
-        if (total == 0) return 100.0;
+        if (total == 0) {
+            return 100.0;
+        }
         return ((double) deadlinesCumplidosTotales / total) * 100.0;
     }
 
     public double calcularTiempoRespuestaPromedio() {
-        if (procesosCompletadosTotales == 0) return 0.0;
+        if (procesosCompletadosTotales == 0) {
+            return 0.0;
+        }
         return (double) acumuladoTiempoRespuesta / procesosCompletadosTotales;
+    }
+
+    public double calcularTiempoEsperaPromedioES() {
+        if (solicitudesESCompletadas == 0) {
+            return 0.0;
+        }
+        return (double) acumuladoTiempoEsperaES / solicitudesESCompletadas;
+    }
+
+    /**
+     * Retorna una copia del historial de desplazamiento acumulado del cabezal hasta el ultimo ciclo.
+     */
+    public synchronized int[] getHistorialDesplazamientoCabezal() {
+        int tamanio = maxCicloRegistrado + 1;
+        int[] copia = new int[tamanio];
+        for (int i = 0; i < tamanio; i++) {
+            copia[i] = historialDesplazamientoCabezal[i];
+        }
+        return copia;
+    }
+
+    /**
+     * Retorna una copia del historial de posicion (bloque) del cabezal hasta el ultimo ciclo.
+     */
+    public synchronized int[] getHistorialPosicionCabezal() {
+        int tamanio = maxCicloRegistrado + 1;
+        int[] copia = new int[tamanio];
+        for (int i = 0; i < tamanio; i++) {
+            copia[i] = historialPosicionCabezal[i];
+        }
+        return copia;
+    }
+
+    /**
+     * Retorna una copia del historial de utilizacion de CPU hasta el ultimo ciclo.
+     */
+    public synchronized double[] getHistorialUsoCpu() {
+        int tamanio = maxCicloRegistrado + 1;
+        double[] copia = new double[tamanio];
+        for (int i = 0; i < tamanio; i++) {
+            copia[i] = historialUsoCpu[i];
+        }
+        return copia;
+    }
+
+    public synchronized int getSolicitudesPorPolitica(String politica) {
+        int idx = mapearIndicePolitica(politica);
+        return solicitudesPorPolitica[idx];
     }
 
     // Getters
     public int getProcesosCompletadosTotales() { return procesosCompletadosTotales; }
-    public int getDeadlinesIncumplidosTotales() { return deadlinesIncumplidosTotales; }
     public int getDeadlinesCumplidosTotales() { return deadlinesCumplidosTotales; }
-    public int getElementosProducidosTotales() { return elementosProducidosTotales; }
-    public int getElementosConsumidosTotales() { return elementosConsumidosTotales; }
+    public int getDeadlinesIncumplidosTotales() { return deadlinesIncumplidosTotales; }
+    public int getDesplazamientoTotalCabezal() { return desplazamientoTotalCabezal; }
+    public int getPosicionActualCabezal() { return posicionActualCabezal; }
+    public int getSolicitudesESCompletadas() { return solicitudesESCompletadas; }
+    public int getTotalSuspensiones() { return totalSuspensiones; }
+    public int getTotalReactivaciones() { return totalReactivaciones; }
     public int getMaxCicloRegistrado() { return maxCicloRegistrado; }
 }
