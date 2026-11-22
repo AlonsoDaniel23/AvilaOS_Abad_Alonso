@@ -14,8 +14,8 @@ import avilaos.synchronization.RelojGlobal;
 
 /**
  * Representa el computador unico del simulador AvilaOS.
- * Integra la CPU, la memoria RAM, el espacio de Swap, las colas de estado
- * y el planificador de procesos bajo el patron Strategy.
+ * Integra CPU, RAM, DiscoSwap, colas de 7 estados y planificadores
+ * a corto y mediano plazo.
  * 
  * @author Daniel Alonso
  */
@@ -29,20 +29,21 @@ public class Computador implements IRelojListener {
     private final MemoriaRAM ram;
     private final DiscoSwap discoSwap;
     private final ColaProcesos colaNuevos;
-    private final ColaProcesos colaProcesos; // Cola de Listos
+    private final ColaProcesos colaProcesos;
     private final ColaProcesos colaBloqueados;
     private final ColaProcesos colaSuspendidosListos;
     private final ColaProcesos colaSuspendidosBloqueados;
     private final ColaProcesos colaTerminados;
     private Planificador planificador;
+    private final PlanificadorMedianoPlazo planificadorMedianoPlazo;
     private String nombrePoliticaActual;
 
     public Computador(int idComputador, String nombre, int tamanioRamKB, int tamanioSwapKB) {
         this.idComputador = idComputador;
         this.nombre = nombre;
         this.cpu = new CPU(idComputador);
-        this.ram = new MemoriaRAM(tamanioRamKB, 4); // Marcos de 4KB por defecto
-        this.discoSwap = new DiscoSwap(tamanioSwapKB, 4); // Bloques de 4KB por defecto
+        this.ram = new MemoriaRAM(tamanioRamKB, 4);
+        this.discoSwap = new DiscoSwap(tamanioSwapKB, 4);
         this.colaNuevos = new ColaProcesos();
         this.colaProcesos = new ColaProcesos();
         this.colaBloqueados = new ColaProcesos();
@@ -50,8 +51,8 @@ public class Computador implements IRelojListener {
         this.colaSuspendidosBloqueados = new ColaProcesos();
         this.colaTerminados = new ColaProcesos();
 
-        // Politica de planificacion por defecto (FCFS)
         this.planificador = new PlanificadorFCFS();
+        this.planificadorMedianoPlazo = new PlanificadorMedianoPlazo();
         this.nombrePoliticaActual = "FCFS";
 
         instancia = this;
@@ -79,19 +80,29 @@ public class Computador implements IRelojListener {
     }
 
     /**
-     * Revisa la Cola de Nuevos y traslada a Listos los procesos que quepan en RAM.
+     * Admite procesos nuevos en RAM; si no hay espacio suficiente, activa Swap-Out.
      */
     public void revisarColaNuevos() {
+        int cicloActual = RelojGlobal.getInstancia().getCicloActual();
         while (!colaNuevos.estaVacia()) {
             Proceso p = (Proceso) colaNuevos.desencolar();
             if (p != null) {
                 int paginas = (p.getTablaPaginas() != null) ? p.getTablaPaginas().length : 4;
-                if (ram.getMarcosLibres() >= paginas) {
+
+                if (!ram.tieneEspacio(paginas)) {
+                    cpu.activarModoKernel();
+                    planificadorMedianoPlazo.intentarLiberarRAM(
+                            ram, discoSwap, colaBloqueados, colaSuspendidosBloqueados, paginas, cicloActual);
+                    if (!cpu.isOcupado()) {
+                        cpu.activarModoUsuario();
+                    }
+                }
+
+                if (ram.tieneEspacio(paginas)) {
                     ram.asignarMemoriaProceso(p.getId(), paginas);
                     p.setEstado(EstadoProceso.LISTO);
                     agregarAListos(p);
                 } else {
-                    // Sin espacio en RAM: regresa a Cola de Nuevos
                     colaNuevos.encolar(p);
                     break;
                 }
@@ -114,9 +125,19 @@ public class Computador implements IRelojListener {
                     EventLog.getInstancia().registrar("[Ciclo " + RelojGlobal.getInstancia().getCicloActual()
                             + "] Proceso " + p.getNombre() + " completo su E/S y paso a Cola de Listos.");
                 } else {
+                    p.incrementarCiclosBloqueado();
                     colaBloqueados.encolar(p);
                 }
             }
+        }
+    }
+
+    /**
+     * Incorpora un proceso reactivado desde Swap hacia la cola de listos.
+     */
+    public void admitirProcesoReactivado(Proceso p) {
+        if (p != null) {
+            agregarAListos(p);
         }
     }
 
@@ -211,8 +232,13 @@ public class Computador implements IRelojListener {
 
     @Override
     public void tick(int cicloActual) {
-        // 0. Verificar procesos bloqueados que hayan completado su E/S
+        // 0. Gestion de estados suspendidos y bloqueados (Mediano y Corto Plazo)
+        planificadorMedianoPlazo.actualizarSuspendidosBloqueados(
+                colaSuspendidosBloqueados, colaSuspendidosListos, cicloActual);
         revisarColaBloqueados();
+        planificadorMedianoPlazo.reactivarProcesos(
+                ram, discoSwap, colaSuspendidosListos, this, cicloActual);
+        revisarColaNuevos();
 
         // 1. Si la CPU esta libre, despachar el siguiente proceso listo
         if (!cpu.isOcupado() && tieneProcesosEnEspera()) {
@@ -227,17 +253,14 @@ public class Computador implements IRelojListener {
         if (cpu.isOcupado() && cpu.getProcesoActual() != null) {
             Proceso procesoActual = cpu.getProcesoActual();
 
-            // Si es un proceso de E/S y aun no ha emitido su llamada al sistema
             if (procesoActual.getTipo() == TipoProceso.IO_BOUND && !procesoActual.isSolicitudDiscoEnviada()) {
                 procesarLlamadaSistemaES(procesoActual, cicloActual);
                 return;
             }
 
-            // Ejecucion normal de instruccion en modo usuario
             procesoActual.ejecutarCiclo();
             cpu.incrementarPC();
 
-            // Verificar si el proceso culmino su tiempo de ejecucion
             if (procesoActual.esFinalizado()) {
                 procesoActual.setEstado(EstadoProceso.TERMINADO);
                 colaTerminados.encolar(procesoActual);
@@ -245,6 +268,9 @@ public class Computador implements IRelojListener {
                 ram.liberarMemoriaProceso(procesoActual.getId());
                 cpu.liberar();
 
+                // Al liberar RAM, priorizar reactivacion desde Swap y luego procesos nuevos
+                planificadorMedianoPlazo.reactivarProcesos(
+                        ram, discoSwap, colaSuspendidosListos, this, cicloActual);
                 revisarColaNuevos();
 
                 if (tieneProcesosEnEspera()) {
@@ -259,8 +285,7 @@ public class Computador implements IRelojListener {
     }
 
     /**
-     * Cambia la CPU a Modo Kernel (SISTEMA_OPERATIVO) para atender una solicitud de E/S,
-     * bloquea el proceso y libera la CPU para el siguiente proceso listo.
+     * Cambia la CPU a Modo Kernel (SISTEMA_OPERATIVO) para atender una solicitud de E/S.
      */
     private void procesarLlamadaSistemaES(Proceso p, int cicloActual) {
         cpu.activarModoKernel();
@@ -275,10 +300,8 @@ public class Computador implements IRelojListener {
         EventLog.getInstancia().registrar("[Ciclo " + cicloActual + "] [KERNEL] Proceso " + p.getNombre()
                 + " solicita E/S (" + operacion + ") sobre '" + ruta + "'. Pasa a BLOQUEADO.");
 
-        // TODO (Integracion Disco): Encolar solicitud en DiscoSimulado cuando este disponible
         colaBloqueados.encolar(p);
 
-        // Libera la CPU (restaura ModoEjecucion.USUARIO) y despacha otro proceso
         cpu.liberar();
         if (tieneProcesosEnEspera()) {
             Proceso siguiente = despacharSiguiente();
@@ -319,5 +342,6 @@ public class Computador implements IRelojListener {
     public ColaProcesos getColaSuspendidosBloqueados() { return colaSuspendidosBloqueados; }
     public ColaProcesos getColaTerminados() { return colaTerminados; }
     public Planificador getPlanificador() { return planificador; }
+    public PlanificadorMedianoPlazo getPlanificadorMedianoPlazo() { return planificadorMedianoPlazo; }
     public String getNombrePoliticaActual() { return nombrePoliticaActual; }
 }
