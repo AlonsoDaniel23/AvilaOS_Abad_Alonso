@@ -5,12 +5,10 @@
 package avilaos.enums;
 
 /**
- * Define los tipos de procesos soportados en ÁvilaOS.
+ * Define los tipos de carga de procesos soportados en ÁvilaOS.
  * @author Daniel Alonso
  */
 public enum TipoProceso {
     CPU_BOUND,
-    IO_BOUND,
-    PRODUCTOR,
-    CONSUMIDOR
+    IO_BOUND
 }
