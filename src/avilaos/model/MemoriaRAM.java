@@ -5,14 +5,13 @@
 package avilaos.model;
 
 /**
- * Administra la Memoria Principal (RAM) del simulador dividida en marcos de pagina.
- * Cumple con la restriccion de arquitectura al gestionar los bloques mediante
- * arreglos nativos en lugar de colecciones de Java.
+ * Administra la Memoria Principal (RAM) dividida en marcos de pagina.
+ * Gestiona los bloques mediante arreglos nativos sin colecciones de Java.
  * 
  * @author Daniel Alonso
  */
 public class MemoriaRAM {
-    
+
     private final int tamanioTotalKB;
     private final int tamanioMarcoKB;
     private final MarcoMemoria[] marcos;
@@ -30,9 +29,6 @@ public class MemoriaRAM {
 
     /**
      * Asigna una cantidad de marcos libres de RAM a un proceso.
-     * @param idProceso ID del proceso.
-     * @param cantidadMarcos Número de marcos a reservar.
-     * @return true si se completó la asignación, false si no había espacio suficiente.
      */
     public boolean asignarMemoriaProceso(int idProceso, int cantidadMarcos) {
         if (getMarcosLibres() < cantidadMarcos) {
@@ -50,8 +46,27 @@ public class MemoriaRAM {
     }
 
     /**
-     * Retorna la cantidad de marcos desocupados.
-     * @return Número de marcos libres.
+     * Indica si existen suficientes marcos libres para alojar la cantidad solicitada.
+     */
+    public boolean tieneEspacio(int cantidadMarcos) {
+        return getMarcosLibres() >= cantidadMarcos;
+    }
+
+    /**
+     * Retorna cuantos marcos ocupa actualmente un proceso especifico en RAM.
+     */
+    public int getMarcosPorProceso(int idProceso) {
+        int contador = 0;
+        for (int i = 0; i < marcos.length; i++) {
+            if (marcos[i].isOcupado() && marcos[i].getIdProcesoAsignado() == idProceso) {
+                contador++;
+            }
+        }
+        return contador;
+    }
+
+    /**
+     * Retorna la cantidad de marcos desocupados en RAM.
      */
     public int getMarcosLibres() {
         int libres = 0;
@@ -64,8 +79,7 @@ public class MemoriaRAM {
     }
 
     /**
-     * Libera todos los marcos ocupados por un proceso cuando termina o es destruido.
-     * @param idProceso ID del proceso a limpiar de la RAM.
+     * Libera todos los marcos ocupados por un proceso.
      */
     public void liberarMemoriaProceso(int idProceso) {
         for (int i = 0; i < marcos.length; i++) {
@@ -76,8 +90,7 @@ public class MemoriaRAM {
     }
 
     /**
-     * Calcula el porcentaje actual de memoria utilizada.
-     * @return Porcentaje de uso (0.0 a 100.0) para la interfaz gráfica.
+     * Calcula el porcentaje actual de memoria RAM utilizada.
      */
     public double getPorcentajeUso() {
         int ocupados = marcos.length - getMarcosLibres();
@@ -85,19 +98,8 @@ public class MemoriaRAM {
     }
 
     // Getters
-    public int getTamanioTotalKB() {
-        return tamanioTotalKB;
-    }
-
-    public int getTamanioMarcoKB() {
-        return tamanioMarcoKB;
-    }
-
-    public MarcoMemoria[] getMarcos() {
-        return marcos;
-    }
-
-    public int getTotalMarcos() {
-        return marcos.length;
-    }
+    public int getTamanioTotalKB() { return tamanioTotalKB; }
+    public int getTamanioMarcoKB() { return tamanioMarcoKB; }
+    public MarcoMemoria[] getMarcos() { return marcos; }
+    public int getTotalMarcos() { return marcos.length; }
 }
