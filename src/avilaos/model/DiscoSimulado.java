@@ -13,7 +13,8 @@ import avilaos.synchronization.Semaforo;
  * Simula el Disco Local (SD) de AvilaOS como un componente de hardware sincronizado
  * con el reloj global mediante IRelojListener. Administra el mapa de bloques numerados,
  * la reserva del area Swap, la asignacion encadenada, el movimiento del cabezal y
- * la cola unica de solicitudes protegida mediante Semaforo.
+ * la cola unica de solicitudes protegida mediante Semaforo e integrada con el patron
+ * Strategy (PlanificadorDisco).
  * 
  * @author Gustavo Abad
  */
@@ -21,13 +22,14 @@ public class DiscoSimulado implements IRelojListener {
 
     private static DiscoSimulado instancia; // Instancia Singleton del disco local
 
-    private final int totalBloques;         // Capacidad total del disco en bloques
+    private final int totalBloques;         // Capacidad total del disco en bloques (0 a totalBloques - 1)
     private final int bloquesSwap;          // Cantidad de bloques reservados para Swap
     private final BloqueDisco[] bloques;    // Arreglo fisico de bloques del disco
 
     private int posicionCabezal;            // Posicion actual (bloque) del cabezal
     private DireccionCabezal direccionCabezal; // Sentido actual del movimiento del cabezal
     private int velocidadCabezal;           // Posiciones que recorre el cabezal por ciclo de reloj
+    private int desplazamientoTotal;        // Contador acumulado de bloques desplazados por el cabezal
     private String nombrePoliticaActual;    // Nombre de la politica de planificacion activa
 
     private PlanificadorDisco planificadorDisco; // Estrategia activa para ordenar la cola de E/S
@@ -61,6 +63,7 @@ public class DiscoSimulado implements IRelojListener {
         this.posicionCabezal = Math.max(0, Math.min(cabezalInicial, this.totalBloques - 1));
         this.direccionCabezal = DireccionCabezal.ASCENDENTE;
         this.velocidadCabezal = 1;
+        this.desplazamientoTotal = 0;
         this.planificadorDisco = new PlanificadorDiscoFIFO();
         this.nombrePoliticaActual = "FIFO";
 
@@ -114,10 +117,14 @@ public class DiscoSimulado implements IRelojListener {
         try {
             // 1. Si el disco esta libre y hay solicitudes pendientes, seleccionar la siguiente
             if (solicitudEnCurso == null && !colaSolicitudes.estaVacia()) {
+                int posicionAntes = posicionCabezal;
                 solicitudEnCurso = planificadorDisco.seleccionarSiguiente(
                         colaSolicitudes, posicionCabezal, direccionCabezal, totalBloques);
 
                 if (solicitudEnCurso != null) {
+                    // Verificar si la politica aplico recorrido de borde (SCAN / C-SCAN)
+                    ajustarBordeSiAplica(posicionAntes, solicitudEnCurso.getBloqueObjetivo(), cicloActual);
+
                     // Calcular tiempo que espero la solicitud en cola antes de ser atendida
                     int tiempoEspera = Math.max(0, cicloActual - solicitudEnCurso.getCicloLlegada());
                     if (metricasService != null) {
@@ -136,15 +143,13 @@ public class DiscoSimulado implements IRelojListener {
                 }
             }
 
-            // 2. Si hay una solicitud activa, mover el cabezal o procesar la transferencia
+            // 2. Si hay una solicitud en curso, mover el cabezal o procesar la transferencia
             if (solicitudEnCurso != null) {
                 int objetivo = solicitudEnCurso.getBloqueObjetivo();
 
                 if (posicionCabezal != objetivo) {
-                    // El cabezal aun no llega al bloque destino: avanzar segun velocidad
                     moverCabezalHacia(objetivo, cicloActual);
                 } else {
-                    // El cabezal ya esta sobre el bloque: ejecutar lectura/escritura
                     ciclosRestantesServicio--;
                     if (ciclosRestantesServicio <= 0) {
                         finalizarSolicitudActual();
@@ -153,6 +158,58 @@ public class DiscoSimulado implements IRelojListener {
             }
         } finally {
             mutexDisco.signalSemaforo();
+        }
+    }
+
+    /**
+     * Gestiona el desplazamiento hasta el extremo del disco (0 o totalBloques - 1)
+     * cuando SCAN invierte sentido o C-SCAN realiza el retorno circular al inicio.
+     */
+    private void ajustarBordeSiAplica(int posActual, int siguienteObjetivo, int cicloActual) {
+        int ultimoBloque = totalBloques - 1;
+
+        if ("SCAN".equalsIgnoreCase(nombrePoliticaActual)) {
+            // Si iba subiendo y el siguiente objetivo es menor, primero toca el extremo superior
+            if (direccionCabezal == DireccionCabezal.ASCENDENTE && siguienteObjetivo < posActual) {
+                int distBorde = ultimoBloque - posActual;
+                if (distBorde > 0) {
+                    desplazamientoTotal += distBorde;
+                    posicionCabezal = ultimoBloque;
+                    if (metricasService != null) {
+                        metricasService.registrarMovimientoCabezal(cicloActual, distBorde, posicionCabezal);
+                    }
+                }
+                direccionCabezal = DireccionCabezal.DESCENDENTE;
+            } else if (direccionCabezal == DireccionCabezal.DESCENDENTE && siguienteObjetivo > posActual) {
+                if (posActual > 0) {
+                    desplazamientoTotal += posActual;
+                    posicionCabezal = 0;
+                    if (metricasService != null) {
+                        metricasService.registrarMovimientoCabezal(cicloActual, posActual, posicionCabezal);
+                    }
+                }
+                direccionCabezal = DireccionCabezal.ASCENDENTE;
+            }
+        } else if ("C-SCAN".equalsIgnoreCase(nombrePoliticaActual)) {
+            // Si iba subiendo y ya no quedan peticiones adelante, llega a 199 y salta a 0 sin sumar retorno
+            if (direccionCabezal == DireccionCabezal.ASCENDENTE && siguienteObjetivo < posActual) {
+                int distBorde = ultimoBloque - posActual;
+                if (distBorde > 0) {
+                    desplazamientoTotal += distBorde;
+                    if (metricasService != null) {
+                        metricasService.registrarMovimientoCabezal(cicloActual, distBorde, ultimoBloque);
+                    }
+                }
+                posicionCabezal = 0; // Salto circular al bloque 0
+            } else if (direccionCabezal == DireccionCabezal.DESCENDENTE && siguienteObjetivo > posActual) {
+                if (posActual > 0) {
+                    desplazamientoTotal += posActual;
+                    if (metricasService != null) {
+                        metricasService.registrarMovimientoCabezal(cicloActual, posActual, 0);
+                    }
+                }
+                posicionCabezal = ultimoBloque;
+            }
         }
     }
 
@@ -173,6 +230,8 @@ public class DiscoSimulado implements IRelojListener {
             direccionCabezal = DireccionCabezal.DESCENDENTE;
             posicionCabezal -= paso;
         }
+
+        desplazamientoTotal += paso;
 
         if (metricasService != null) {
             metricasService.registrarMovimientoCabezal(cicloActual, paso, posicionCabezal);
@@ -211,11 +270,6 @@ public class DiscoSimulado implements IRelojListener {
 
     // ==================== GESTION DE BLOQUES Y ASIGNACION ENCADENADA ====================
 
-    /**
-     * Cuenta cuantos bloques libres estan disponibles para archivos (excluyendo el area Swap).
-     * 
-     * @return Cantidad de bloques libres para almacenamiento de archivos.
-     */
     public int getBloquesLibresArchivos() {
         int libres = 0;
         for (int i = 0; i < totalBloques; i++) {
@@ -226,13 +280,6 @@ public class DiscoSimulado implements IRelojListener {
         return libres;
     }
 
-    /**
-     * Asigna 'cantidad' bloques libres mediante asignacion encadenada para un archivo nuevo.
-     * 
-     * @param nombreArchivo Nombre del archivo propietario de los bloques.
-     * @param cantidad Cantidad de bloques requeridos.
-     * @return Indice del primer bloque de la lista enlazada, o -1 si no hay espacio suficiente.
-     */
     public int asignarBloquesEncadenados(String nombreArchivo, int cantidad) {
         if (cantidad <= 0 || getBloquesLibresArchivos() < cantidad) {
             return -1;
@@ -242,7 +289,6 @@ public class DiscoSimulado implements IRelojListener {
         int bloqueAnterior = -1;
         int asignados = 0;
 
-        // Buscar bloques libres y enlazar cada bloque con el siguiente
         for (int i = 0; i < totalBloques && asignados < cantidad; i++) {
             if (!bloques[i].isEsAreaSwap() && !bloques[i].isOcupado()) {
                 bloques[i].asignarArchivo(nombreArchivo, -1);
@@ -259,25 +305,15 @@ public class DiscoSimulado implements IRelojListener {
         return primerBloque;
     }
 
-    /**
-     * Asigna un rango contiguo especifico de bloques (usado al importar el JSON inicial).
-     * 
-     * @param nombreArchivo Nombre del archivo propietario.
-     * @param bloqueInicio Bloque inicial especificado en el JSON.
-     * @param cantidad Cantidad de bloques del archivo.
-     * @return true si los bloques estaban libres y pudieron asignarse, false en caso contrario.
-     */
     public boolean asignarBloquesEspecificos(String nombreArchivo, int bloqueInicio, int cantidad) {
         if (bloqueInicio < 0 || bloqueInicio + cantidad > totalBloques) {
             return false;
         }
-        // Verificar disponibilidad completa antes de asignar
         for (int i = bloqueInicio; i < bloqueInicio + cantidad; i++) {
             if (bloques[i].isEsAreaSwap() || bloques[i].isOcupado()) {
                 return false;
             }
         }
-        // Asignar y encadenar cada bloque con su consecutivo
         for (int i = bloqueInicio; i < bloqueInicio + cantidad; i++) {
             int siguiente = (i < bloqueInicio + cantidad - 1) ? (i + 1) : -1;
             bloques[i].asignarArchivo(nombreArchivo, siguiente);
@@ -285,11 +321,6 @@ public class DiscoSimulado implements IRelojListener {
         return true;
     }
 
-    /**
-     * Recorre la lista enlazada de bloques desde 'primerBloque' y libera cada uno.
-     * 
-     * @param primerBloque Indice del primer bloque asignado al archivo eliminado.
-     */
     public void liberarCadenaBloques(int primerBloque) {
         int actual = primerBloque;
         while (actual >= 0 && actual < totalBloques) {
@@ -301,11 +332,6 @@ public class DiscoSimulado implements IRelojListener {
 
     // ==================== GESTION DEL AREA SWAP EN DISCO ====================
 
-    /**
-     * Calcula cuantos bloques libres quedan dentro de la particion Swap.
-     * 
-     * @return Numero de bloques libres en el area Swap.
-     */
     public int getBloquesLibresSwap() {
         int libres = 0;
         for (int i = 0; i < totalBloques; i++) {
@@ -316,14 +342,6 @@ public class DiscoSimulado implements IRelojListener {
         return libres;
     }
 
-    /**
-     * Reserva bloques en el area Swap del disco para alojar un proceso suspendido.
-     * 
-     * @param idProceso ID del proceso suspendido.
-     * @param nombreProceso Nombre del proceso suspendido.
-     * @param cantidadBloques Cantidad de bloques (equivalentes a marcos de RAM) requeridos.
-     * @return true si habia espacio en Swap y se asigno correctamente.
-     */
     public boolean asignarSwapProceso(int idProceso, String nombreProceso, int cantidadBloques) {
         if (getBloquesLibresSwap() < cantidadBloques) {
             return false;
@@ -338,11 +356,6 @@ public class DiscoSimulado implements IRelojListener {
         return true;
     }
 
-    /**
-     * Libera los bloques de Swap ocupados por un proceso al ser reactivado o terminado.
-     * 
-     * @param idProceso ID del proceso cuyos bloques Swap se liberaran.
-     */
     public void liberarSwapProceso(int idProceso) {
         for (int i = 0; i < totalBloques; i++) {
             if (bloques[i].isEsAreaSwap() && bloques[i].isOcupado() && bloques[i].getIdProcesoSwap() == idProceso) {
@@ -357,6 +370,7 @@ public class DiscoSimulado implements IRelojListener {
     public int getBloquesSwap() { return bloquesSwap; }
     public BloqueDisco[] getBloques() { return bloques; }
     public int getPosicionCabezal() { return posicionCabezal; }
+    public int getDesplazamientoTotal() { return desplazamientoTotal; }
 
     public void setPosicionCabezal(int posicionCabezal) {
         if (posicionCabezal >= 0 && posicionCabezal < totalBloques) {
