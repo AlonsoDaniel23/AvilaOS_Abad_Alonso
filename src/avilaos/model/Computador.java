@@ -10,76 +10,99 @@ import avilaos.enums.TipoProceso;
 import avilaos.interfaces.IRelojListener;
 import avilaos.scheduling.*;
 import avilaos.services.EventLog;
-import avilaos.synchronization.BufferCircular;
 import avilaos.synchronization.RelojGlobal;
+
 /**
- * Representa un nodo de computo individual dentro del cluster simulado.
- * Integra el patrón Strategy con la interfaz Planificador para alternar
- * algoritmos de planificación (FCFS, RR, EDF, Prioridades) dinámicamente.
+ * Representa el computador unico del simulador AvilaOS.
+ * Integra CPU, RAM, DiscoSwap, colas de 7 estados y planificadores
+ * a corto y mediano plazo.
  * 
  * @author Daniel Alonso
  */
 public class Computador implements IRelojListener {
-    
+
+    private static Computador instancia;
+
     private final int idComputador;
     private final String nombre;
     private final CPU cpu;
     private final MemoriaRAM ram;
     private final DiscoSwap discoSwap;
     private final ColaProcesos colaNuevos;
-    private final ColaProcesos colaProcesos; // Cola de Listos por defecto
+    private final ColaProcesos colaProcesos;
     private final ColaProcesos colaBloqueados;
+    private final ColaProcesos colaSuspendidosListos;
+    private final ColaProcesos colaSuspendidosBloqueados;
     private final ColaProcesos colaTerminados;
     private Planificador planificador;
+    private final PlanificadorMedianoPlazo planificadorMedianoPlazo;
     private String nombrePoliticaActual;
 
     public Computador(int idComputador, String nombre, int tamanioRamKB, int tamanioSwapKB) {
         this.idComputador = idComputador;
         this.nombre = nombre;
         this.cpu = new CPU(idComputador);
-        this.ram = new MemoriaRAM(tamanioRamKB, 4); // Marcos de 4KB por defecto
-        this.discoSwap = new DiscoSwap(tamanioSwapKB, 4); // Bloques de 4KB por defecto
+        this.ram = new MemoriaRAM(tamanioRamKB, 4);
+        this.discoSwap = new DiscoSwap(tamanioSwapKB, 4);
         this.colaNuevos = new ColaProcesos();
         this.colaProcesos = new ColaProcesos();
         this.colaBloqueados = new ColaProcesos();
+        this.colaSuspendidosListos = new ColaProcesos();
+        this.colaSuspendidosBloqueados = new ColaProcesos();
         this.colaTerminados = new ColaProcesos();
-        
-        // Política de planificación por defecto (FCFS)
+
         this.planificador = new PlanificadorFCFS();
+        this.planificadorMedianoPlazo = new PlanificadorMedianoPlazo();
         this.nombrePoliticaActual = "FCFS";
+
+        instancia = this;
     }
 
     /**
-     * Encola un nuevo proceso. Ingresa a la Cola de Nuevos e intenta asignar RAM.
-     * @param proceso Proceso a agregar.
+     * Retorna la instancia unica del computador en el sistema.
+     */
+    public static synchronized Computador getInstancia() {
+        if (instancia == null) {
+            instancia = new Computador(1, "AvilaOS-PC", 256, 512);
+        }
+        return instancia;
+    }
+
+    /**
+     * Encola un nuevo proceso en estado NUEVO e intenta asignarle memoria RAM.
      */
     public void encolarProceso(Proceso proceso) {
         if (proceso != null) {
             proceso.setEstado(EstadoProceso.NUEVO);
             this.colaNuevos.encolar(proceso);
-            revisarColaNuevos(); // Asigna RAM si hay espacio disponible
+            revisarColaNuevos();
         }
     }
 
     /**
-     * Revisa la Cola de Nuevos y traslada a la Cola de Listos aquellos procesos
-     * que dispongan de suficiente memoria RAM libre.
+     * Admite procesos nuevos en RAM; si no hay espacio suficiente, activa Swap-Out.
      */
     public void revisarColaNuevos() {
+        int cicloActual = RelojGlobal.getInstancia().getCicloActual();
         while (!colaNuevos.estaVacia()) {
             Proceso p = (Proceso) colaNuevos.desencolar();
             if (p != null) {
                 int paginas = (p.getTablaPaginas() != null) ? p.getTablaPaginas().length : 4;
-                if (ram.getMarcosLibres() >= paginas) {
+
+                if (!ram.tieneEspacio(paginas)) {
+                    cpu.activarModoKernel();
+                    planificadorMedianoPlazo.intentarLiberarRAM(
+                            ram, discoSwap, colaBloqueados, colaSuspendidosBloqueados, paginas, cicloActual);
+                    if (!cpu.isOcupado()) {
+                        cpu.activarModoUsuario();
+                    }
+                }
+
+                if (ram.tieneEspacio(paginas)) {
                     ram.asignarMemoriaProceso(p.getId(), paginas);
                     p.setEstado(EstadoProceso.LISTO);
-                    if (planificador != null) {
-                        planificador.agregarProceso(p);
-                    } else {
-                        colaProcesos.encolar(p);
-                    }
+                    agregarAListos(p);
                 } else {
-                    // No hay espacio suficiente en RAM: regresa a Cola Nuevos y detiene la admisión
                     colaNuevos.encolar(p);
                     break;
                 }
@@ -88,35 +111,21 @@ public class Computador implements IRelojListener {
     }
 
     /**
-     * Revisa la Cola de Bloqueados y promueve a la Cola de Listos a los procesos
-     * cuyo semáforo o buffer asociado ya dispone de recursos.
+     * Revisa la Cola de Bloqueados y promueve a Listos los procesos cuya E/S ya finalizo.
      */
     public void revisarColaBloqueados() {
         int tamanioInicial = colaBloqueados.getTamaño();
         for (int i = 0; i < tamanioInicial; i++) {
             Proceso p = (Proceso) colaBloqueados.desencolar();
             if (p != null) {
-                BufferCircular buffer = obtenerBufferParaProceso(p);
-                boolean seDesbloqueo = false;
-
-                if (buffer != null) {
-                    if (p.getTipo() == TipoProceso.PRODUCTOR && buffer.getEspacios().getValor() > 0) {
-                        seDesbloqueo = true;
-                    } else if (p.getTipo() == TipoProceso.CONSUMIDOR && buffer.getItems().getValor() > 0) {
-                        seDesbloqueo = true;
-                    }
-                }
-
-                if (seDesbloqueo) {
+                if (p.isOperacionESCompletada()) {
+                    p.setMotivoBloqueo("");
                     p.setEstado(EstadoProceso.LISTO);
-                    if (planificador != null) {
-                        planificador.agregarProceso(p);
-                    } else {
-                        colaProcesos.encolar(p);
-                    }
-                    EventLog.getInstancia().registrar("[Ciclo " + RelojGlobal.getInstancia().getCicloActual() + 
-                        "] Proceso " + p.getNombre() + " se desbloqueó y pasó a Cola de Listos.");
+                    agregarAListos(p);
+                    EventLog.getInstancia().registrar("[Ciclo " + RelojGlobal.getInstancia().getCicloActual()
+                            + "] Proceso " + p.getNombre() + " completo su E/S y paso a Cola de Listos.");
                 } else {
+                    p.incrementarCiclosBloqueado();
                     colaBloqueados.encolar(p);
                 }
             }
@@ -124,42 +133,27 @@ public class Computador implements IRelojListener {
     }
 
     /**
-     * Obtiene el buffer asociado al proceso. Si el nombre no está especificado o no existe,
-     * lo busca/asigna automáticamente desde el Clúster ("B1" o el primer buffer disponible).
+     * Incorpora un proceso reactivado desde Swap hacia la cola de listos.
      */
-    private BufferCircular obtenerBufferParaProceso(Proceso p) {
-        if (p == null) {
-            return null;
+    public void admitirProcesoReactivado(Proceso p) {
+        if (p != null) {
+            agregarAListos(p);
         }
-
-        String nombreBuf = p.getNombreBuffer();
-        BufferCircular buffer = null;
-
-        // 1. Intenta buscarlo por el nombre indicado en el proceso
-        if (nombreBuf != null && !nombreBuf.trim().isEmpty()) {
-            buffer = ClusterManager.getInstancia().buscarBuffer(nombreBuf);
-        }
-
-        // 2. Si es nulo o vacío, realiza la asignación/búsqueda automática
-        if (buffer == null) {
-            buffer = ClusterManager.getInstancia().buscarBuffer("B1");
-            if (buffer == null && ClusterManager.getInstancia().getListaBuffers() != null 
-                    && ClusterManager.getInstancia().getListaBuffers().getTamaño() > 0) {
-                buffer = (BufferCircular) ClusterManager.getInstancia().getListaBuffers().obtener(0);
-            }
-            
-            // Asigna automáticamente el nombre del buffer encontrado al proceso
-            if (buffer != null) {
-                p.setNombreBuffer(buffer.getNombre());
-            }
-        }
-
-        return buffer;
     }
 
     /**
-     * Cambia la política de planificación activa y reordena los procesos pendientes.
-     * @param nuevaPolitica Nombre de la política seleccionada en la interfaz.
+     * Inserta un proceso en el planificador activo o en la cola de listos por defecto.
+     */
+    private void agregarAListos(Proceso p) {
+        if (planificador != null) {
+            planificador.agregarProceso(p);
+        } else {
+            colaProcesos.encolar(p);
+        }
+    }
+
+    /**
+     * Cambia la politica de planificacion activa y migra los procesos pendientes.
      */
     public void cambiarPolitica(String nuevaPolitica) {
         if (nuevaPolitica == null || nuevaPolitica.equalsIgnoreCase(nombrePoliticaActual)) {
@@ -183,7 +177,6 @@ public class Computador implements IRelojListener {
                 break;
         }
 
-        // Migrar procesos existentes al nuevo planificador
         while (tieneProcesosEnEspera()) {
             Proceso p = despacharSiguiente();
             if (p != null) {
@@ -196,7 +189,7 @@ public class Computador implements IRelojListener {
     }
 
     /**
-     * Obtiene y remueve el siguiente proceso a ejecutar según la política activa.
+     * Extrae el siguiente proceso a ejecutar segun la politica de planificacion activa.
      */
     public Proceso despacharSiguiente() {
         if (planificador != null && planificador.hayProcesos()) {
@@ -208,7 +201,7 @@ public class Computador implements IRelojListener {
     }
 
     /**
-     * Retorna el número de procesos en espera dentro de la Cola de Listos o el Planificador activo.
+     * Retorna la cantidad de procesos en espera dentro de la Cola de Listos.
      */
     public int getCantidadProcesosListos() {
         if (planificador != null) {
@@ -218,7 +211,7 @@ public class Computador implements IRelojListener {
     }
 
     /**
-     * Evalúa si hay procesos pendientes por ejecutar en estado LISTO.
+     * Indica si existen procesos listos pendientes por ejecutar.
      */
     public boolean tieneProcesosEnEspera() {
         if (planificador != null) {
@@ -228,7 +221,7 @@ public class Computador implements IRelojListener {
     }
 
     /**
-     * Obtiene la cola activa de procesos listos para renderizado en la interfaz.
+     * Retorna la cola de listos activa para renderizado en la interfaz grafica.
      */
     public ColaProcesos getColaListosEfectiva() {
         if (planificador != null && planificador.getCola() != null) {
@@ -239,10 +232,15 @@ public class Computador implements IRelojListener {
 
     @Override
     public void tick(int cicloActual) {
-        // 0. Evaluar si algún proceso bloqueado puede desbloquearse
+        // 0. Gestion de estados suspendidos y bloqueados (Mediano y Corto Plazo)
+        planificadorMedianoPlazo.actualizarSuspendidosBloqueados(
+                colaSuspendidosBloqueados, colaSuspendidosListos, cicloActual);
         revisarColaBloqueados();
+        planificadorMedianoPlazo.reactivarProcesos(
+                ram, discoSwap, colaSuspendidosListos, this, cicloActual);
+        revisarColaNuevos();
 
-        // 1. Si la CPU está inactiva y hay procesos listos, despachar uno a la CPU
+        // 1. Si la CPU esta libre, despachar el siguiente proceso listo
         if (!cpu.isOcupado() && tieneProcesosEnEspera()) {
             Proceso siguiente = despacharSiguiente();
             if (siguiente != null) {
@@ -251,46 +249,30 @@ public class Computador implements IRelojListener {
             }
         }
 
-        // 2. Si hay un proceso activo en la CPU
+        // 2. Ejecutar ciclo del proceso actual en CPU
         if (cpu.isOcupado() && cpu.getProcesoActual() != null) {
             Proceso procesoActual = cpu.getProcesoActual();
 
-            // Evaluar semáforo SOLO si el proceso aún no ha realizado la operación en el buffer
-            boolean seBloqueo = false;
-            if (!procesoActual.isOperacionBufferRealizada()) {
-                seBloqueo = evaluarSincronizacionBuffer(procesoActual);
-            }
-
-            if (seBloqueo) {
-                procesoActual.setEstado(EstadoProceso.BLOQUEADO);
-                colaBloqueados.encolar(procesoActual);
-                
-                cpu.liberar();
-
-                if (tieneProcesosEnEspera()) {
-                    Proceso siguiente = despacharSiguiente();
-                    if (siguiente != null) {
-                        siguiente.setEstado(EstadoProceso.EJECUCION);
-                        cpu.cargarProceso(siguiente);
-                    }
-                }
+            if (procesoActual.getTipo() == TipoProceso.IO_BOUND && !procesoActual.isSolicitudDiscoEnviada()) {
+                procesarLlamadaSistemaES(procesoActual, cicloActual);
                 return;
             }
 
-            // Si no se bloqueó, ejecuta la instrucción normal
             procesoActual.ejecutarCiclo();
             cpu.incrementarPC();
 
-            // Si el proceso completó su tiempo de ejecución
             if (procesoActual.esFinalizado()) {
                 procesoActual.setEstado(EstadoProceso.TERMINADO);
                 colaTerminados.encolar(procesoActual);
-                
+
                 ram.liberarMemoriaProceso(procesoActual.getId());
                 cpu.liberar();
-                
-                revisarColaNuevos(); // Evalúa admisión de procesos pendientes tras liberar memoria
-                
+
+                // Al liberar RAM, priorizar reactivacion desde Swap y luego procesos nuevos
+                planificadorMedianoPlazo.reactivarProcesos(
+                        ram, discoSwap, colaSuspendidosListos, this, cicloActual);
+                revisarColaNuevos();
+
                 if (tieneProcesosEnEspera()) {
                     Proceso siguiente = despacharSiguiente();
                     if (siguiente != null) {
@@ -303,77 +285,77 @@ public class Computador implements IRelojListener {
     }
 
     /**
-     * Gestiona el acceso al Buffer Circular mediante semáforos si el proceso es Productor/Consumidor,
-     * aplicando la penalización de latencia de red si el buffer reside en un computador remoto.
-     * @return true si el proceso se bloqueó por semáforo o por latencia de red, false en caso contrario.
+     * Cambia la CPU a Modo Kernel (SISTEMA_OPERATIVO) para atender una solicitud de E/S
+     * y encola la solicitud real en DiscoSimulado.
      */
-    private boolean evaluarSincronizacionBuffer(Proceso p) {
-        if (p == null || p.getTipo() == null) {
-            return false;
+    private void procesarLlamadaSistemaES(Proceso p, int cicloActual) {
+        cpu.activarModoKernel();
+
+        avilaos.enums.TipoOperacionES opEnum = (p.getOperacionES() != null)
+                ? p.getOperacionES() : avilaos.enums.TipoOperacionES.LEER;
+        String ruta = (p.getRutaArchivo() != null && !p.getRutaArchivo().isEmpty())
+                ? p.getRutaArchivo() : "/tarea.txt";
+
+        int bloqueObjetivo = 0;
+        int cantidadBloques = Math.max(1, p.getBloquesSolicitadosES());
+        EntradaSistemaArchivos entrada = SistemaArchivos.getInstancia().buscarPorRuta(ruta);
+        if (entrada != null && !entrada.esDirectorio()) {
+            Archivo arch = (Archivo) entrada;
+            bloqueObjetivo = Math.max(0, arch.getPrimerBloque());
+            cantidadBloques = Math.max(1, arch.getTamanoBloques());
         }
 
-        BufferCircular buffer = obtenerBufferParaProceso(p);
-        if (buffer == null) {
-            return false;
-        }
+        SolicitudDisco solicitud = new SolicitudDisco(
+                p, opEnum, ruta, bloqueObjetivo, cantidadBloques, cicloActual);
+        DiscoSimulado.getInstancia().encolarSolicitud(solicitud);
 
-        // 1. Evaluación de Latencia de Red para accesos a Buffers Remotos
-        boolean esRemoto = (buffer.getIdComputadorAnfitrion() != this.idComputador);
+        p.setSolicitudDiscoEnviada(true);
+        p.setMotivoBloqueo("E/S Disco (" + opEnum.name() + ")");
+        p.setEstado(EstadoProceso.BLOQUEADO);
 
-        if (esRemoto) {
-            int latenciaConfigurada = ClusterManager.getInstancia().getLatenciaRed();
+        EventLog.getInstancia().registrar("[Ciclo " + cicloActual + "] [KERNEL] Proceso " + p.getNombre()
+                + " solicita E/S (" + opEnum.name() + ") sobre '" + ruta
+                + "' (Bloque #" + bloqueObjetivo + "). Pasa a BLOQUEADO.");
 
-            // Primera detección del acceso remoto para este ciclo/operación
-            if (p.getCiclosLatenciaPendientes() == -1) {
-                p.setCiclosLatenciaPendientes(latenciaConfigurada);
-                EventLog.getInstancia().registrar("[Ciclo " + RelojGlobal.getInstancia().getCicloActual() + 
-                    "] Proceso " + p.getNombre() + " (Nodo " + this.idComputador + 
-                    ") accede al Buffer " + buffer.getNombre() + " de forma REMOTA en Nodo " + 
-                    buffer.getIdComputadorAnfitrion() + " (Latencia: " + latenciaConfigurada + " ciclos)");
-            }
+        colaBloqueados.encolar(p);
 
-            // Descontar ciclos de latencia de red pendientes
-            if (p.getCiclosLatenciaPendientes() > 0) {
-                p.setCiclosLatenciaPendientes(p.getCiclosLatenciaPendientes() - 1);
-                return true; // Se bloquea temporalmente por retardo de red
+        cpu.liberar();
+        if (tieneProcesosEnEspera()) {
+            Proceso siguiente = despacharSiguiente();
+            if (siguiente != null) {
+                siguiente.setEstado(EstadoProceso.EJECUCION);
+                cpu.cargarProceso(siguiente);
             }
         }
-
-        // 2. Evaluación de Semáforos (Buffer Local o Latencia de Red ya cumplida)
-        if (p.getTipo() == TipoProceso.PRODUCTOR) {
-            boolean exito = buffer.producir(p);
-            if (!exito) {
-                EventLog.getInstancia().registrar("[Ciclo " + RelojGlobal.getInstancia().getCicloActual() + 
-                    "] Proceso " + p.getNombre() + " se bloqueó en el semáforo 'espacios' del Buffer " + buffer.getNombre());
-                return true;
-            }
-            p.setOperacionBufferRealizada(true);
-            p.setCiclosLatenciaPendientes(-1); // Reinicia el contador de latencia
-        } else if (p.getTipo() == TipoProceso.CONSUMIDOR) {
-            boolean exito = buffer.consumir(p);
-            if (!exito) {
-                EventLog.getInstancia().registrar("[Ciclo " + RelojGlobal.getInstancia().getCicloActual() + 
-                    "] Proceso " + p.getNombre() + " se bloqueó en el semáforo 'items' del Buffer " + buffer.getNombre());
-                return true;
-            }
-            p.setOperacionBufferRealizada(true);
-            p.setCiclosLatenciaPendientes(-1); // Reinicia el contador de latencia
-        }
-
-        return false;
     }
 
     /**
-     * Libera un proceso de la Cola de Bloqueados y lo reingresa al Planificador/Cola de Listos.
+     * Notifica que un proceso termino su operacion de E/S en el disco para despertarlo
+     * y extraerlo de la cola de bloqueados sin duplicarlo.
      */
     public void desbloquearProceso(Proceso p) {
-        if (p != null) {
-            p.setEstado(EstadoProceso.LISTO);
-            if (planificador != null) {
-                planificador.agregarProceso(p);
-            } else {
-                colaProcesos.encolar(p);
+        if (p == null) {
+            return;
+        }
+        p.setOperacionESCompletada(true);
+        p.setMotivoBloqueo("");
+
+        if (p.getEstado() == EstadoProceso.SUSPENDIDO_BLOQUEADO) {
+            p.setEstado(EstadoProceso.SUSPENDIDO_LISTO);
+            colaSuspendidosListos.encolar(p);
+        } else if (p.getEstado() == EstadoProceso.BLOQUEADO) {
+            // Extraerlo de colaBloqueados inmediatamente para evitar que revisarColaBloqueados() lo duplique
+            int tam = colaBloqueados.getTamaño();
+            for (int i = 0; i < tam; i++) {
+                Proceso actual = (Proceso) colaBloqueados.desencolar();
+                if (actual != null && actual.getId() != p.getId()) {
+                    colaBloqueados.encolar(actual);
+                }
             }
+            p.setEstado(EstadoProceso.LISTO);
+            agregarAListos(p);
+            EventLog.getInstancia().registrar("[Ciclo " + RelojGlobal.getInstancia().getCicloActual()
+                    + "] Proceso " + p.getNombre() + " completo su E/S y paso a Cola de Listos.");
         }
     }
 
@@ -386,7 +368,10 @@ public class Computador implements IRelojListener {
     public ColaProcesos getColaNuevos() { return colaNuevos; }
     public ColaProcesos getColaProcesos() { return colaProcesos; }
     public ColaProcesos getColaBloqueados() { return colaBloqueados; }
+    public ColaProcesos getColaSuspendidosListos() { return colaSuspendidosListos; }
+    public ColaProcesos getColaSuspendidosBloqueados() { return colaSuspendidosBloqueados; }
     public ColaProcesos getColaTerminados() { return colaTerminados; }
     public Planificador getPlanificador() { return planificador; }
+    public PlanificadorMedianoPlazo getPlanificadorMedianoPlazo() { return planificadorMedianoPlazo; }
     public String getNombrePoliticaActual() { return nombrePoliticaActual; }
 }

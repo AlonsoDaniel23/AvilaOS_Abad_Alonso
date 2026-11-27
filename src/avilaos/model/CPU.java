@@ -8,14 +8,13 @@ import avilaos.enums.ModoEjecucion;
 
 /**
  * Representa la Unidad Central de Procesamiento (CPU) del simulador.
- * Mantiene el estado del procesador, el contador de programa (PC)
- * y el modo de ejecucion actual.
+ * Gestiona el proceso en ejecucion, el contador de programa (PC) y el modo de privilegio.
  * 
  * @author Daniel Alonso
  */
 public class CPU {
-    
-private final int idCpu;
+
+    private final int idCpu;
     private Proceso procesoActual;
     private int programCounter;
     private ModoEjecucion modoActual;
@@ -30,8 +29,7 @@ private final int idCpu;
     }
 
     /**
-     * Asigna un proceso a la CPU para iniciar o reanudar su ejecucion.
-     * @param proceso Proceso a despachar.
+     * Asigna un proceso a la CPU para iniciar o reanudar su ejecucion en modo usuario.
      */
     public void cargarProceso(Proceso proceso) {
         this.procesoActual = proceso;
@@ -41,7 +39,7 @@ private final int idCpu;
     }
 
     /**
-     * Libera la CPU al finalizar o desalojar un proceso.
+     * Libera la CPU al finalizar o bloquear un proceso y restaura el modo usuario.
      */
     public void liberar() {
         this.procesoActual = null;
@@ -55,6 +53,27 @@ private final int idCpu;
      */
     public void incrementarPC() {
         this.programCounter++;
+    }
+
+    /**
+     * Cambia el procesador a modo privilegiado del sistema operativo (Kernel).
+     */
+    public void activarModoKernel() {
+        this.modoActual = ModoEjecucion.SISTEMA_OPERATIVO;
+    }
+
+    /**
+     * Restaura el procesador a modo no privilegiado (Usuario).
+     */
+    public void activarModoUsuario() {
+        this.modoActual = ModoEjecucion.USUARIO;
+    }
+
+    /**
+     * Indica si la CPU se encuentra ejecutando rutinas del sistema operativo.
+     */
+    public boolean esModoKernel() {
+        return this.modoActual == ModoEjecucion.SISTEMA_OPERATIVO;
     }
 
     // Getters y Setters

@@ -99,6 +99,10 @@ public class RelojGlobal implements Runnable {
         return cicloActual;
     }
 
+    public void setCicloActual(int cicloActual) {
+        this.cicloActual = cicloActual;
+    }
+    
     public int getDuracionCicloMs() {
         return duracionCicloMs;
     }

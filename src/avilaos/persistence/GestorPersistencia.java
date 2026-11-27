@@ -106,7 +106,7 @@ public class GestorPersistencia {
                            + p.getPrioridad() + "," 
                            + p.getTiempoEjecucion() + "," 
                            + p.getTipo() + "," 
-                           + p.getNombreBuffer() + "," 
+                           + (p.getRutaArchivo() != null ? p.getRutaArchivo() : "") + "," 
                            + idNodo + "\n");
             }
         }
@@ -166,24 +166,25 @@ public class GestorPersistencia {
                         }
                         break;
 
-                    case "PROCESO":
-                        if (partes.length >= 9) {
-                            int idProc = Integer.parseInt(partes[1]);
-                            int idPadre = Integer.parseInt(partes[2]);
-                            String nomProc = partes[3];
-                            int prio = Integer.parseInt(partes[4]);
-                            int tEjec = Integer.parseInt(partes[5]);
-                            TipoProceso tipoEnum = TipoProceso.valueOf(partes[6]);
-                            String bufNombre = partes[7];
-                            int idNodoAsignado = Integer.parseInt(partes[8]);
+                   case "PROCESO":
+                    if (partes.length >= 9) {
+                        int idProc = Integer.parseInt(partes[1]);
+                        int idPadre = Integer.parseInt(partes[2]);
+                        String nombre = partes[3];
+                        int prioridad = Integer.parseInt(partes[4]);
+                        int ciclos = Integer.parseInt(partes[5]);
+                        TipoProceso tipoEnum = TipoProceso.valueOf(partes[6]);
+                        String rutaArchivo = partes[7];
+                        int idNodoAsignado = Integer.parseInt(partes[8]);
+                        int paginas = 4;
 
-                            Proceso p = new Proceso(idProc, idPadre, nomProc, prio, tEjec, 4, tipoEnum, bufNombre);
-                            Computador nodoDestino = cluster.buscarPorId(idNodoAsignado);
-                            if (nodoDestino != null) {
-                                nodoDestino.encolarProceso(p);
-                            }
+                        Proceso p = new Proceso(idProc, idPadre, nombre, prioridad, ciclos, paginas, tipoEnum, null, rutaArchivo);
+                        Computador nodoDestino = cluster.buscarPorId(idNodoAsignado);
+                        if (nodoDestino != null) {
+                            nodoDestino.encolarProceso(p);
                         }
-                        break;
+                    }
+                    break;
 
                     default:
                         // Compatibilidad con archivos CSV creados en versiones anteriores (sin etiquetas)
