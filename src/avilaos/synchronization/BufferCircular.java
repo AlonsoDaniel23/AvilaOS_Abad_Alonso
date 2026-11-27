@@ -65,9 +65,7 @@ public class BufferCircular {
         buffer[entrada] = proceso;
         entrada = (entrada + 1) % capacidad;
 
-        if (metricas != null) {
-            metricas.registrarProduccion();
-        }
+
 
         mutex.signalSemaforo();
         items.signalSemaforo();
@@ -87,9 +85,7 @@ public class BufferCircular {
         buffer[salida] = null;
         salida = (salida + 1) % capacidad;
 
-        if (metricas != null) {
-            metricas.registrarConsumo();
-        }
+
 
         mutex.signalSemaforo();
         espacios.signalSemaforo();
@@ -108,9 +104,7 @@ public class BufferCircular {
         buffer[salida] = null;
         salida = (salida + 1) % capacidad;
 
-        if (metricas != null) {
-            metricas.registrarConsumo();
-        }
+
 
         mutex.signalSemaforo();
         espacios.signalSemaforo();
