@@ -225,7 +225,7 @@ public class Vista2Monitoreo extends JFrame {
 
     // ==================== ENCABEZADO Y MODO ADMINISTRADOR / USUARIO ====================
 
-    private JPanel crearPanelEncabezado() {
+ private JPanel crearPanelEncabezado() {
         JPanel panel = new JPanel(new BorderLayout(10, 0));
         panel.setBackground(COLOR_HEADER);
         panel.setBorder(BorderFactory.createEmptyBorder(12, 20, 12, 20));
@@ -273,22 +273,46 @@ public class Vista2Monitoreo extends JFrame {
         JButton btnVerMetricas = crearBotonFlat("📊 Métricas", COLOR_SECONDARY, Color.WHITE);
         btnAvanzarCiclo = crearBotonFlat("+1 Ciclo →", COLOR_PRIMARY, Color.WHITE);
         btnPausarReanudar = crearBotonFlat("Iniciar", COLOR_SUCCESS, Color.WHITE);
+        JButton btnReiniciar = crearBotonFlat("↺ Reiniciar", COLOR_DANGER, Color.WHITE);
 
         btnCargarJSON.addActionListener(e -> cargarJSONEnVivo());
         btnVerMetricas.addActionListener(e -> mostrarVentanaMetricas());
         btnAvanzarCiclo.addActionListener(e -> ejecutarCicloSimulacion());
         btnPausarReanudar.addActionListener(this::accionPausarReanudar);
+        btnReiniciar.addActionListener(e -> accionReiniciarSimulador());
 
         panelBotones.add(btnCargarJSON);
         panelBotones.add(btnVerMetricas);
         panelBotones.add(btnAvanzarCiclo);
         panelBotones.add(btnPausarReanudar);
+        panelBotones.add(btnReiniciar);
 
         panel.add(panelIzq, BorderLayout.WEST);
         panel.add(panelSesion, BorderLayout.CENTER);
         panel.add(panelBotones, BorderLayout.EAST);
 
         return panel;
+    }
+ 
+    private void accionReiniciarSimulador() {
+        int conf = JOptionPane.showConfirmDialog(
+                this,
+                "¿Detener la simulación actual y volver a la pantalla de configuración?",
+                "Reiniciar ÁvilaOS",
+                JOptionPane.YES_NO_OPTION
+        );
+        if (conf != JOptionPane.YES_OPTION) {
+            return;
+        }
+
+        if (timerSimulacion != null && timerSimulacion.isRunning()) {
+            timerSimulacion.stop();
+        }
+        simulacionEnEjecucion = false;
+        RelojGlobal.getInstancia().setCicloActual(0);
+
+        this.dispose();
+        SwingUtilities.invokeLater(() -> new Vista1Configuracion().setVisible(true));
     }
 
     private void aplicarCambioModoSesion() {

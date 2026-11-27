@@ -61,6 +61,8 @@ public class Vista1Configuracion extends JFrame {
     private int procesosCargadosCount = 0;
     private boolean jsonFSCargado = false;
     private boolean jsonProcesosCargado = false;
+    private File archivoJSONFS = null;
+    private File archivoJSONProcesos = null;
 
     private static final Color COLOR_HEADER = new Color(15, 23, 42);
     private static final Color COLOR_BG = new Color(248, 250, 252);
@@ -395,11 +397,34 @@ public class Vista1Configuracion extends JFrame {
             }
 
             inicializarModulosBackend(ramKB, swapKB, totalBloques, bloquesSwap, cabezalInicial);
-            lblEstadoJSONFS.setText("Pendiente: JSON de Disco y Archivos");
-            lblEstadoJSONFS.setForeground(new Color(239, 68, 68));
-            lblEstadoJSONProcesos.setText("Pendiente: JSON de Procesos");
-            lblEstadoJSONProcesos.setForeground(new Color(239, 68, 68));
-            lblResumenCola.setText("Procesos listos/nuevos en cola: 0");
+
+            if (archivoJSONFS != null) {
+                gestorJSON.analizarYCargarJSON(archivoJSONFS.getAbsolutePath(), discoSimulado, sistemaArchivos, null);
+                jsonFSCargado = true;
+                lblEstadoJSONFS.setText("✔ FS cargado: " + archivoJSONFS.getName()
+                        + " (Cabezal: " + discoSimulado.getPosicionCabezal() + ")");
+                lblEstadoJSONFS.setForeground(COLOR_SUCCESS);
+            } else {
+                lblEstadoJSONFS.setText("Pendiente: JSON de Disco y Archivos");
+                lblEstadoJSONFS.setForeground(new Color(239, 68, 68));
+            }
+
+            if (archivoJSONProcesos != null) {
+                GestorJSON.ResultadoCargaJSON resProc = gestorJSON.analizarYCargarJSON(
+                        archivoJSONProcesos.getAbsolutePath(), null, null, computador);
+                int cant = resProc.procesosCargados.getTamaño();
+                procesosCargadosCount += cant;
+                contadorProcesosId += cant;
+                jsonProcesosCargado = true;
+                lblEstadoJSONProcesos.setText("✔ Procesos cargados: " + archivoJSONProcesos.getName()
+                        + " (+" + cant + " proc.)");
+                lblEstadoJSONProcesos.setForeground(COLOR_SUCCESS);
+                lblResumenCola.setText("Procesos listos/nuevos en cola: " + procesosCargadosCount);
+            } else {
+                lblEstadoJSONProcesos.setText("Pendiente: JSON de Procesos");
+                lblEstadoJSONProcesos.setForeground(new Color(239, 68, 68));
+                lblResumenCola.setText("Procesos listos/nuevos en cola: 0");
+            }
 
             eventLog.registrar(0, "Hardware configurado: RAM=" + ramKB + "KB, Disco=" + totalBloques + " bloques (Swap=" + bloquesSwap + "), Cabezal=" + cabezalInicial);
             JOptionPane.showMessageDialog(this, "Parámetros de hardware aplicados correctamente.", "Hardware Listo", JOptionPane.INFORMATION_MESSAGE);
@@ -468,7 +493,6 @@ public class Vista1Configuracion extends JFrame {
         }
 
         File archivo = chooser.getSelectedFile();
-        // Primera pasada solo para inspeccionar el esquema del archivo seleccionado
         GestorJSON.ResultadoCargaJSON meta = gestorJSON.analizarYCargarJSON(
                 archivo.getAbsolutePath(), null, null, null);
 
@@ -479,7 +503,6 @@ public class Vista1Configuracion extends JFrame {
             return;
         }
 
-        // Validacion cruzada estricta por tipo de JSON
         if (esDiscoYArchivos && !meta.contieneFS) {
             JOptionPane.showMessageDialog(this,
                     "Archivo incorrecto: este JSON no contiene la estructura del Sistema de Archivos ('fileSystem' / 'diskConfig').\n"
@@ -538,11 +561,13 @@ public class Vista1Configuracion extends JFrame {
 
         if (esDiscoYArchivos) {
             jsonFSCargado = true;
+            archivoJSONFS = archivo;
             lblEstadoJSONFS.setText("✔ FS cargado: " + archivo.getName()
                     + " (Cabezal: " + discoSimulado.getPosicionCabezal() + ")");
             lblEstadoJSONFS.setForeground(COLOR_SUCCESS);
         } else {
             jsonProcesosCargado = true;
+            archivoJSONProcesos = archivo;
             lblEstadoJSONProcesos.setText("✔ Procesos cargados: " + archivo.getName()
                     + " (+" + cant + " proc.)");
             lblEstadoJSONProcesos.setForeground(COLOR_SUCCESS);
