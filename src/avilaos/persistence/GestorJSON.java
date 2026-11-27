@@ -12,6 +12,10 @@ import avilaos.model.DiscoSimulado;
 import avilaos.model.EntradaSistemaArchivos;
 import avilaos.model.Proceso;
 import avilaos.model.SistemaArchivos;
+import avilaos.scheduling.PlanificadorDiscoCSCAN;
+import avilaos.scheduling.PlanificadorDiscoFIFO;
+import avilaos.scheduling.PlanificadorDiscoSCAN;
+import avilaos.scheduling.PlanificadorDiscoSSTF;
 import avilaos.services.EventLog;
 
 import java.io.BufferedReader;
@@ -24,35 +28,37 @@ import java.io.IOException;
 /**
  * Gestiona la importacion y exportacion en formato JSON de la estructura inicial
  * del disco, el arbol jerarquico de directorios/archivos y la configuracion de
- * procesos de AvilaOS, implementado en Java puro sin colecciones de java.util
- * ni librerias externas.
+ * procesos de AvilaOS (soporta formato oficial del enunciado y formato anidado).
  * 
  * @author Gustavo Abad
  */
 public class GestorJSON {
 
-    private int indiceParser; // Cursor global utilizado por el analizador sintactico JSON
+    public GestorJSON() {
+    }
 
     /**
-     * Constructor por defecto del gestor de persistencia JSON.
+     * Resultado estructurado de la carga de un archivo JSON (hardware, config y procesos).
      */
-    public GestorJSON() {
-        this.indiceParser = 0;
+    public static class ResultadoCargaJSON {
+        public boolean exito;
+        public boolean contieneFS;
+        public boolean contieneProcesos;
+        public int totalBlocks = -1;
+        public int initialHead = -1;
+        public int cycleDurationMs = -1;
+        public int swapSizeBlocks = -1;
+        public String initialDiskPolicy = "";
+        public int ramCapacity = -1;
+        public String cpuPolicy = "";
+        public int quantum = -1;
+        public ColaProcesos procesosCargados = new ColaProcesos();
     }
 
     // =========================================================================
     // 1. EXPORTAR ESTADO ACTUAL DEL SISTEMA DE ARCHIVOS Y DISCO A JSON
     // =========================================================================
 
-    /**
-     * Exporta el estado actual del DiscoSimulado y todo el arbol jerarquico del
-     * SistemaArchivos a un archivo en formato JSON indentado.
-     * 
-     * @param rutaArchivoJSON Ruta destino del archivo .json a generar.
-     * @param disco Instancia del DiscoSimulado actual.
-     * @param sistemaArchivos Instancia del SistemaArchivos con el arbol a serializar.
-     * @return true si el archivo JSON se escribio correctamente, false en caso de error.
-     */
     public boolean exportarSistemaArchivosJSON(String rutaArchivoJSON, DiscoSimulado disco,
             SistemaArchivos sistemaArchivos) {
         if (rutaArchivoJSON == null || rutaArchivoJSON.trim().isEmpty()
@@ -64,22 +70,28 @@ public class GestorJSON {
         try (BufferedWriter writer = new BufferedWriter(new FileWriter(archivo))) {
             StringBuilder sb = new StringBuilder();
             sb.append("{\n");
-
-            // 1. Metadatos del estado actual del Disco Simulado
-            sb.append("  \"disco\": {\n");
-            sb.append("    \"total_bloques\": ").append(disco.getTotalBloques()).append(",\n");
-            sb.append("    \"bloques_swap\": ").append(disco.getBloquesSwap()).append(",\n");
-            sb.append("    \"posicion_cabezal\": ").append(disco.getPosicionCabezal()).append(",\n");
-            sb.append("    \"politica_planificacion\": \"").append(escaparJSON(disco.getNombrePoliticaActual())).append("\",\n");
-            sb.append("    \"bloques_libres_archivos\": ").append(disco.getBloquesLibresArchivos()).append(",\n");
-            sb.append("    \"bloques_libres_swap\": ").append(disco.getBloquesLibresSwap()).append("\n");
+            sb.append("  \"diskConfig\": {\n");
+            sb.append("    \"totalBlocks\": ").append(disco.getTotalBloques()).append(",\n");
+            sb.append("    \"initialHead\": ").append(disco.getPosicionCabezal()).append("\n");
             sb.append("  },\n");
-
-            // 2. Arbol jerarquico completo del Sistema de Archivos desde la raiz "/"
-            sb.append("  \"sistema_archivos\": ");
-            serializarEntradaRecursiva(sistemaArchivos.getRaiz(), sb, 2);
-            sb.append("\n");
-
+            sb.append("  \"fileSystem\": [\n");
+            ListaEnlazada listaEntradas = new ListaEnlazada();
+            recolectarEntradasPlanas(sistemaArchivos.getRaiz(), listaEntradas);
+            for (int i = 0; i < listaEntradas.getTamaño(); i++) {
+                EntradaSistemaArchivos ent = (EntradaSistemaArchivos) listaEntradas.obtener(i);
+                sb.append("    {\n");
+                sb.append("      \"path\": \"").append(escaparJSON(ent.getRutaCompleta())).append("\",\n");
+                sb.append("      \"type\": \"").append(ent.esDirectorio() ? "DIRECTORY" : "FILE").append("\",\n");
+                if (!ent.esDirectorio()) {
+                    Archivo arch = (Archivo) ent;
+                    sb.append("      \"startBlock\": ").append(arch.getPrimerBloque()).append(",\n");
+                    sb.append("      \"blocks\": ").append(arch.getTamanoBloques()).append(",\n");
+                }
+                sb.append("      \"owner\": \"").append(escaparJSON(ent.getPropietario())).append("\",\n");
+                sb.append("      \"permissions\": \"").append(ent.getPermiso() == PermisoArchivo.PRIVADO ? "private" : "public").append("\"\n");
+                sb.append("    }").append(i < listaEntradas.getTamaño() - 1 ? "," : "").append("\n");
+            }
+            sb.append("  ]\n");
             sb.append("}\n");
 
             writer.write(sb.toString());
@@ -91,111 +103,102 @@ public class GestorJSON {
         }
     }
 
-    /**
-     * Serializa recursivamente un nodo del sistema de archivos (Directorio o Archivo)
-     * en formato JSON respetando la indentacion.
-     * 
-     * @param entrada Nodo actual del arbol jerarquico.
-     * @param sb Acumulador de texto JSON.
-     * @param nivelIndentacion Nivel actual de sangria (en espacios).
-     */
-    private void serializarEntradaRecursiva(EntradaSistemaArchivos entrada, StringBuilder sb, int nivelIndentacion) {
-        if (entrada == null) {
-            sb.append("null");
-            return;
+    private void recolectarEntradasPlanas(EntradaSistemaArchivos entrada, ListaEnlazada destino) {
+        if (entrada == null) return;
+        if (!"/".equals(entrada.getRutaCompleta())) {
+            destino.insertarFinal(entrada);
         }
-
-        String pad = generarEspacios(nivelIndentacion);
-        String padInterno = generarEspacios(nivelIndentacion + 2);
-
-        sb.append("{\n");
-        sb.append(padInterno).append("\"tipo\": \"").append(entrada.esDirectorio() ? "DIRECTORIO" : "ARCHIVO").append("\",\n");
-        sb.append(padInterno).append("\"nombre\": \"").append(escaparJSON(entrada.getNombre())).append("\",\n");
-        sb.append(padInterno).append("\"ruta\": \"").append(escaparJSON(entrada.getRutaCompleta())).append("\",\n");
-        sb.append(padInterno).append("\"propietario\": \"").append(escaparJSON(entrada.getPropietario())).append("\",\n");
-        sb.append(padInterno).append("\"permiso\": \"").append(entrada.getPermiso().name()).append("\"");
-
-        if (!entrada.esDirectorio()) {
-            // Serializar atributos especificos de un Archivo
-            Archivo arch = (Archivo) entrada;
-            sb.append(",\n");
-            sb.append(padInterno).append("\"tamano_bloques\": ").append(arch.getTamanoBloques()).append(",\n");
-            sb.append(padInterno).append("\"primer_bloque\": ").append(arch.getPrimerBloque()).append(",\n");
-            sb.append(padInterno).append("\"contenido\": \"").append(escaparJSON(arch.getContenido())).append("\"\n");
-        } else {
-            // Serializar arreglo JSON de hijos para un Directorio
-            Directorio dir = (Directorio) entrada;
-            ListaEnlazada hijos = dir.getHijos();
-            sb.append(",\n");
-            sb.append(padInterno).append("\"hijos\": [");
-
-            if (hijos != null && !hijos.estaVacia()) {
-                sb.append("\n");
-                for (int i = 0; i < hijos.getTamaño(); i++) {
-                    EntradaSistemaArchivos hijo = (EntradaSistemaArchivos) hijos.obtener(i);
-                    sb.append(generarEspacios(nivelIndentacion + 4));
-                    serializarEntradaRecursiva(hijo, sb, nivelIndentacion + 4);
-                    if (i < hijos.getTamaño() - 1) {
-                        sb.append(",");
-                    }
-                    sb.append("\n");
-                }
-                sb.append(padInterno).append("]\n");
-            } else {
-                sb.append("]\n");
+        if (entrada.esDirectorio()) {
+            ListaEnlazada hijos = ((Directorio) entrada).getHijos();
+            for (int i = 0; i < hijos.getTamaño(); i++) {
+                recolectarEntradasPlanas((EntradaSistemaArchivos) hijos.obtener(i), destino);
             }
         }
-
-        sb.append(pad).append("}");
     }
 
     // =========================================================================
     // 2. IMPORTAR ESTRUCTURA DE DISCO, ARCHIVOS Y PROCESOS DESDE JSON
     // =========================================================================
 
-    /**
-     * Carga desde un archivo JSON la configuracion inicial del disco, la estructura
-     * jerarquica de archivos/directorios y los procesos iniciales.
-     * 
-     * @param rutaArchivoJSON Ruta del archivo .json de entrada.
-     * @param disco Instancia de DiscoSimulado donde se asignaran los bloques.
-     * @param sistemaArchivos Instancia de SistemaArchivos donde se creara el arbol.
-     * @param computador Instancia de Computador donde se encolaran los procesos cargados (puede ser null).
-     * @return ColaProcesos con todos los procesos importados desde el JSON, o null si fallo la lectura.
-     */
-    public ColaProcesos cargarDesdeJSON(String rutaArchivoJSON, DiscoSimulado disco,
+    public ResultadoCargaJSON analizarYCargarJSON(String rutaArchivoJSON, DiscoSimulado disco,
             SistemaArchivos sistemaArchivos, Computador computador) {
+        ResultadoCargaJSON res = new ResultadoCargaJSON();
         String contenidoJSON = leerArchivoTexto(rutaArchivoJSON);
         if (contenidoJSON == null || contenidoJSON.trim().isEmpty()) {
-            return null;
+            return res;
         }
 
-        ColaProcesos procesosCargados = new ColaProcesos();
-
         try {
-            // 1. Extraer y aplicar configuracion de disco (si existe bloque "disco")
-            String bloqueDisco = extraerValorObjeto(contenidoJSON, "disco");
-            if (bloqueDisco != null && disco != null) {
-                int cabezal = extraerEntero(bloqueDisco, "posicion_cabezal",
-                        extraerEntero(bloqueDisco, "initial_head", disco.getPosicionCabezal()));
-                disco.setPosicionCabezal(cabezal);
+            // A. Detectar configuracion de disco ("diskConfig" oficial o "disco")
+            String bloqueDiskConfig = extraerValorObjeto(contenidoJSON, "diskConfig");
+            if (bloqueDiskConfig == null) {
+                bloqueDiskConfig = extraerValorObjeto(contenidoJSON, "disco");
+            }
+            if (bloqueDiskConfig != null) {
+                res.totalBlocks = extraerEntero(bloqueDiskConfig, "totalBlocks",
+                        extraerEntero(bloqueDiskConfig, "total_bloques", -1));
+                res.initialHead = extraerEntero(bloqueDiskConfig, "initialHead",
+                        extraerEntero(bloqueDiskConfig, "posicion_cabezal", -1));
             }
 
-            // 2. Reconstruir el arbol jerarquico de SistemaArchivos (si existe "sistema_archivos")
-            String bloqueFS = extraerValorObjeto(contenidoJSON, "sistema_archivos");
-            if (bloqueFS != null && sistemaArchivos != null && disco != null) {
-                sistemaArchivos.reiniciarArbol();
-                cargarNodoRecursivo(bloqueFS, sistemaArchivos.getRaiz(), disco, true);
+            // B. Detectar configuracion global y de computador ("globalConfig" y "computer")
+            String bloqueGlobal = extraerValorObjeto(contenidoJSON, "globalConfig");
+            if (bloqueGlobal != null) {
+                res.cycleDurationMs = extraerEntero(bloqueGlobal, "cycleDurationMs", -1);
+                res.swapSizeBlocks = extraerEntero(bloqueGlobal, "swapSizeBlocks", -1);
+                res.initialDiskPolicy = extraerCadena(bloqueGlobal, "initialDiskPolicy", "");
             }
 
-            // 3. Cargar lista de procesos iniciales (si existe arreglo "procesos")
-            String bloqueProcesos = extraerValorArreglo(contenidoJSON, "procesos");
+            String bloqueComp = extraerValorObjeto(contenidoJSON, "computer");
+            if (bloqueComp != null) {
+                res.ramCapacity = extraerEntero(bloqueComp, "ramCapacity", -1);
+                res.cpuPolicy = extraerCadena(bloqueComp, "policy", "");
+                res.quantum = extraerEntero(bloqueComp, "quantum", -1);
+            }
+
+            // C. Cargar Sistema de Archivos ("fileSystem" arreglo plano oficial o "sistema_archivos" arbol)
+            String arregloFSOficial = extraerValorArreglo(contenidoJSON, "fileSystem");
+            String objetoFSAnidado = extraerValorObjeto(contenidoJSON, "sistema_archivos");
+
+            if (arregloFSOficial != null) {
+                res.contieneFS = true;
+                if (sistemaArchivos != null && disco != null) {
+                    if (res.initialHead >= 0) {
+                        disco.setPosicionCabezal(res.initialHead);
+                    }
+                    sistemaArchivos.reiniciarArbol();
+                    cargarFileSystemPlanoOficial(arregloFSOficial, sistemaArchivos, disco);
+                }
+            } else if (objetoFSAnidado != null) {
+                res.contieneFS = true;
+                if (sistemaArchivos != null && disco != null) {
+                    if (res.initialHead >= 0) {
+                        disco.setPosicionCabezal(res.initialHead);
+                    }
+                    sistemaArchivos.reiniciarArbol();
+                    cargarNodoRecursivo(objetoFSAnidado, sistemaArchivos.getRaiz(), disco, true);
+                }
+            }
+
+            // D. Cargar Procesos ("processes" oficial o "procesos")
+            String bloqueProcesos = extraerValorArreglo(contenidoJSON, "processes");
+            if (bloqueProcesos == null) {
+                bloqueProcesos = extraerValorArreglo(contenidoJSON, "procesos");
+            }
             if (bloqueProcesos != null) {
+                res.contieneProcesos = true;
+                if (computador != null && !res.cpuPolicy.isEmpty()) {
+                    computador.cambiarPolitica(normalizarPoliticaCPU(res.cpuPolicy));
+                }
+                if (disco != null && !res.initialDiskPolicy.isEmpty()) {
+                    aplicarPoliticaDisco(disco, res.initialDiskPolicy);
+                }
+
                 String[] objetosProceso = dividirElementosArregloJSON(bloqueProcesos);
                 for (int i = 0; i < objetosProceso.length; i++) {
-                    Proceso p = parsearProcesoJSON(objetosProceso[i]);
+                    Proceso p = parsearProcesoJSON(objetosProceso[i], i + 1);
                     if (p != null) {
-                        procesosCargados.encolar(p);
+                        res.procesosCargados.encolar(p);
                         if (computador != null) {
                             computador.encolarProceso(p);
                         }
@@ -203,29 +206,98 @@ public class GestorJSON {
                 }
             }
 
-            EventLog.getInstancia().registrar("Configuracion importada exitosamente desde JSON: " + rutaArchivoJSON
-                    + " (" + procesosCargados.getTamaño() + " procesos cargados).");
-            return procesosCargados;
+            res.exito = res.contieneFS || res.contieneProcesos || (bloqueDiskConfig != null) || (bloqueGlobal != null);
+            if (res.exito && (disco != null || computador != null)) {
+                EventLog.getInstancia().registrar("JSON importado: " + rutaArchivoJSON
+                        + " (FS=" + res.contieneFS + ", Procesos=" + res.procesosCargados.getTamaño() + ")");
+            }
+            return res;
 
         } catch (Exception e) {
             System.err.println("Error al parsear archivo JSON: " + e.getMessage());
-            return null;
+            return res;
         }
     }
 
+    public ColaProcesos cargarDesdeJSON(String rutaArchivoJSON, DiscoSimulado disco,
+            SistemaArchivos sistemaArchivos, Computador computador) {
+        ResultadoCargaJSON res = analizarYCargarJSON(rutaArchivoJSON, disco, sistemaArchivos, computador);
+        return res.exito ? res.procesosCargados : null;
+    }
+
     /**
-     * Reconstruye recursivamente un Directorio o Archivo a partir de su objeto JSON
-     * y reserva sus bloques en DiscoSimulado.
-     * 
-     * @param jsonNodo Subcadena JSON correspondiente al nodo actual.
-     * @param padre Directorio padre donde se insertara (o raiz si es el nodo superior).
-     * @param disco DiscoSimulado donde se reservaran los bloques del archivo.
-     * @param esRaiz true si el objeto JSON representa directamente al directorio raiz "/".
+     * Carga el arreglo plano "fileSystem" del formato oficial del enunciado.
      */
-    private void cargarNodoRecursivo(String jsonNodo, Directorio padre, DiscoSimulado disco, boolean esRaiz) {
-        if (jsonNodo == null || padre == null) {
-            return;
+    private void cargarFileSystemPlanoOficial(String arregloFS, SistemaArchivos fs, DiscoSimulado disco) {
+        String[] items = dividirElementosArregloJSON(arregloFS);
+        for (int i = 0; i < items.length; i++) {
+            String item = items[i];
+            String path = extraerCadena(item, "path", "");
+            if (path.isEmpty() || "/".equals(path)) continue;
+
+            String type = extraerCadena(item, "type", "FILE");
+            String owner = extraerCadena(item, "owner", "admin");
+            String permStr = extraerCadena(item, "permissions", "public");
+            PermisoArchivo permiso = "private".equalsIgnoreCase(permStr) || "PRIVADO".equalsIgnoreCase(permStr)
+                    ? PermisoArchivo.PRIVADO : PermisoArchivo.PUBLICO;
+
+            int ultimoSlash = path.lastIndexOf('/');
+            String rutaPadre = (ultimoSlash <= 0) ? "/" : path.substring(0, ultimoSlash);
+            String nombre = path.substring(ultimoSlash + 1);
+
+            Directorio padre = asegurarRutaDirectorios(fs, rutaPadre, owner);
+
+            if ("DIRECTORY".equalsIgnoreCase(type) || "DIRECTORIO".equalsIgnoreCase(type)) {
+                if (padre.buscarHijo(nombre) == null) {
+                    Directorio nuevoDir = new Directorio(nombre, owner, permiso, padre);
+                    padre.agregarHijo(nuevoDir);
+                }
+            } else {
+                int startBlock = extraerEntero(item, "startBlock", extraerEntero(item, "primer_bloque", -1));
+                int blocks = Math.max(1, extraerEntero(item, "blocks", extraerEntero(item, "tamano_bloques", 1)));
+                String contenido = extraerCadena(item, "content", extraerCadena(item, "contenido", "Archivo " + nombre));
+
+                int bloqueAsignado = -1;
+                if (startBlock >= 0 && disco.asignarBloquesEspecificos(nombre, startBlock, blocks)) {
+                    bloqueAsignado = startBlock;
+                } else {
+                    bloqueAsignado = disco.asignarBloquesEncadenados(nombre, blocks);
+                }
+
+                if (bloqueAsignado != -1 && padre.buscarHijo(nombre) == null) {
+                    Archivo arch = new Archivo(nombre, owner, permiso, padre, blocks, bloqueAsignado);
+                    arch.setContenido(contenido);
+                    arch.setProcesoCreador("JSON Inicial");
+                    disco.asignarColorACadena(bloqueAsignado, arch.getColorDistintivo());
+                    padre.agregarHijo(arch);
+                }
+            }
         }
+    }
+
+    private Directorio asegurarRutaDirectorios(SistemaArchivos fs, String rutaPadre, String ownerPorDefecto) {
+        if (rutaPadre == null || rutaPadre.isEmpty() || "/".equals(rutaPadre)) {
+            return fs.getRaiz();
+        }
+        String[] partes = rutaPadre.split("/");
+        Directorio actual = fs.getRaiz();
+        for (int i = 0; i < partes.length; i++) {
+            String seg = partes[i].trim();
+            if (seg.isEmpty()) continue;
+            EntradaSistemaArchivos hijo = actual.buscarHijo(seg);
+            if (hijo == null) {
+                Directorio creado = new Directorio(seg, ownerPorDefecto, PermisoArchivo.PUBLICO, actual);
+                actual.agregarHijo(creado);
+                actual = creado;
+            } else if (hijo.esDirectorio()) {
+                actual = (Directorio) hijo;
+            }
+        }
+        return actual;
+    }
+
+    private void cargarNodoRecursivo(String jsonNodo, Directorio padre, DiscoSimulado disco, boolean esRaiz) {
+        if (jsonNodo == null || padre == null) return;
 
         String tipo = extraerCadena(jsonNodo, "tipo", "DIRECTORIO");
         String nombre = extraerCadena(jsonNodo, "nombre", esRaiz ? "/" : "sin_nombre");
@@ -235,13 +307,10 @@ public class GestorJSON {
                 ? PermisoArchivo.PRIVADO : PermisoArchivo.PUBLICO;
 
         if ("ARCHIVO".equalsIgnoreCase(tipo)) {
-            int tamano = Math.max(1, extraerEntero(jsonNodo, "tamano_bloques",
-                    extraerEntero(jsonNodo, "size", 1)));
-            int primerBloque = extraerEntero(jsonNodo, "primer_bloque",
-                    extraerEntero(jsonNodo, "start_block", -1));
+            int tamano = Math.max(1, extraerEntero(jsonNodo, "tamano_bloques", extraerEntero(jsonNodo, "size", 1)));
+            int primerBloque = extraerEntero(jsonNodo, "primer_bloque", extraerEntero(jsonNodo, "start_block", -1));
             String contenido = extraerCadena(jsonNodo, "contenido", "");
 
-            // Intentar asignar en el bloque especifico del JSON; si no, buscar bloques libres
             int bloqueAsignado = -1;
             if (primerBloque >= 0 && disco.asignarBloquesEspecificos(nombre, primerBloque, tamano)) {
                 bloqueAsignado = primerBloque;
@@ -252,10 +321,11 @@ public class GestorJSON {
             if (bloqueAsignado != -1) {
                 Archivo archivo = new Archivo(nombre, propietario, permiso, padre, tamano, bloqueAsignado);
                 archivo.setContenido(contenido);
+                archivo.setProcesoCreador("JSON Inicial");
+                disco.asignarColorACadena(bloqueAsignado, archivo.getColorDistintivo());
                 padre.agregarHijo(archivo);
             }
         } else {
-            // Nodo de tipo DIRECTORIO
             Directorio dirActual;
             if (esRaiz) {
                 padre.setPropietario(propietario);
@@ -266,7 +336,6 @@ public class GestorJSON {
                 padre.agregarHijo(dirActual);
             }
 
-            // Procesar recursivamente el arreglo de "hijos" si existe
             String arregloHijos = extraerValorArreglo(jsonNodo, "hijos");
             if (arregloHijos != null) {
                 String[] hijosJSON = dividirElementosArregloJSON(arregloHijos);
@@ -277,64 +346,108 @@ public class GestorJSON {
         }
     }
 
-    /**
-     * Construye un objeto Proceso (PCB) a partir de su definicion en JSON.
-     * 
-     * @param jsonProc Subcadena JSON con los atributos del proceso.
-     * @return Instancia de Proceso configurada.
-     */
-    private Proceso parsearProcesoJSON(String jsonProc) {
+    private Proceso parsearProcesoJSON(String jsonProc, int idPorDefecto) {
         if (jsonProc == null || jsonProc.trim().isEmpty()) {
             return null;
         }
 
-        int id = extraerEntero(jsonProc, "id", 1);
+        int id = extraerEntero(jsonProc, "id", idPorDefecto);
         int idPadre = extraerEntero(jsonProc, "id_padre", 0);
-        String nombre = extraerCadena(jsonProc, "nombre", "P" + id);
-        int prioridad = extraerEntero(jsonProc, "prioridad", 1);
-        int tiempoEjecucion = Math.max(1, extraerEntero(jsonProc, "tiempo_ejecucion", 5));
-        int paginas = Math.max(1, extraerEntero(jsonProc, "paginas", 4));
+        String nombre = extraerCadena(jsonProc, "name", extraerCadena(jsonProc, "nombre", "P" + id));
+        int prioridad = extraerEntero(jsonProc, "priority", extraerEntero(jsonProc, "prioridad", 1));
+
+        int tiempoEjecucion = Math.max(1, extraerEntero(jsonProc, "instructions",
+                extraerEntero(jsonProc, "tiempo_ejecucion", 2)));
+
+        int memoryKB = extraerEntero(jsonProc, "memory", -1);
+        int paginas = (memoryKB > 0)
+                ? Math.max(1, memoryKB / 4)
+                : Math.max(1, extraerEntero(jsonProc, "paginas", 4));
+
         int deadline = extraerEntero(jsonProc, "deadline", 0);
         int tiempoLlegada = extraerEntero(jsonProc, "tiempo_llegada", 0);
 
-        String tipoStr = extraerCadena(jsonProc, "tipo", "CPU_BOUND");
-        TipoProceso tipo = "IO_BOUND".equalsIgnoreCase(tipoStr)
-                ? TipoProceso.IO_BOUND : TipoProceso.CPU_BOUND;
+        String targetPath = extraerCadena(jsonProc, "targetPath", extraerCadena(jsonProc, "ruta_archivo", ""));
+        String opRaw = extraerCadena(jsonProc, "operation", extraerCadena(jsonProc, "operacion_es", ""));
+        String tipoRaw = extraerCadena(jsonProc, "tipo", "");
 
-        String opStr = extraerCadena(jsonProc, "operacion_es", "");
-        TipoOperacionES operacionES = null;
-        if (!opStr.isEmpty()) {
-            try {
-                operacionES = TipoOperacionES.valueOf(opStr.trim().toUpperCase());
-            } catch (IllegalArgumentException ignored) {
-                operacionES = TipoOperacionES.LEER;
-            }
+        TipoProceso tipo;
+        if (!tipoRaw.isEmpty()) {
+            tipo = "IO_BOUND".equalsIgnoreCase(tipoRaw) ? TipoProceso.IO_BOUND : TipoProceso.CPU_BOUND;
+        } else {
+            tipo = (!opRaw.isEmpty() || !targetPath.isEmpty()) ? TipoProceso.IO_BOUND : TipoProceso.CPU_BOUND;
         }
 
-        String rutaArchivo = extraerCadena(jsonProc, "ruta_archivo", "");
+        TipoOperacionES operacionES = null;
+        if (!opRaw.isEmpty()) {
+            operacionES = mapearOperacionES(opRaw);
+        } else if (tipo == TipoProceso.IO_BOUND) {
+            operacionES = TipoOperacionES.LEER;
+        }
 
         Proceso proceso = new Proceso(id, idPadre, nombre, prioridad, tiempoEjecucion,
-                paginas, tipo, operacionES, rutaArchivo);
+                paginas, tipo, operacionES, targetPath);
         proceso.setDeadline(deadline);
         proceso.setTiempoLlegada(tiempoLlegada);
         return proceso;
+    }
+
+    private TipoOperacionES mapearOperacionES(String op) {
+        String norm = op.trim().toUpperCase();
+        switch (norm) {
+            case "CREATE":
+            case "CREAR":
+                return TipoOperacionES.CREAR;
+            case "UPDATE":
+            case "WRITE":
+            case "ACTUALIZAR":
+                return TipoOperacionES.ACTUALIZAR;
+            case "DELETE":
+            case "ELIMINAR":
+                return TipoOperacionES.ELIMINAR;
+            case "READ":
+            case "LEER":
+            default:
+                return TipoOperacionES.LEER;
+        }
+    }
+
+    private String normalizarPoliticaCPU(String pol) {
+        String p = pol.trim().toUpperCase();
+        if (p.equals("RR") || p.contains("ROUND")) return "Round Robin";
+        if (p.equals("EDF")) return "EDF";
+        if (p.startsWith("PRIO")) return "Prioridades";
+        return "FCFS";
+    }
+
+    private void aplicarPoliticaDisco(DiscoSimulado disco, String pol) {
+        String p = pol.trim().toUpperCase();
+        switch (p) {
+            case "SSTF":
+                disco.cambiarPlanificador(new PlanificadorDiscoSSTF());
+                break;
+            case "SCAN":
+                disco.cambiarPlanificador(new PlanificadorDiscoSCAN());
+                break;
+            case "C-SCAN":
+            case "CSCAN":
+                disco.cambiarPlanificador(new PlanificadorDiscoCSCAN());
+                break;
+            case "FIFO":
+            default:
+                disco.cambiarPlanificador(new PlanificadorDiscoFIFO());
+                break;
+        }
     }
 
     // =========================================================================
     // 3. UTILIDADES DE PARSEO Y SERIALIZACION JSON NATIVO (SIN JAVA.UTIL)
     // =========================================================================
 
-    /**
-     * Lee todo el contenido de un archivo de texto plano desde disco.
-     */
     private String leerArchivoTexto(String ruta) {
-        if (ruta == null) {
-            return null;
-        }
+        if (ruta == null) return null;
         File archivo = new File(ruta.trim());
-        if (!archivo.exists()) {
-            return null;
-        }
+        if (!archivo.exists()) return null;
         StringBuilder contenido = new StringBuilder();
         try (BufferedReader reader = new BufferedReader(new FileReader(archivo))) {
             String linea;
@@ -347,9 +460,6 @@ public class GestorJSON {
         }
     }
 
-    /**
-     * Extrae el valor String asociado a una clave JSON (ej. "nombre": "valor").
-     */
     private String extraerCadena(String json, String clave, String valorDefecto) {
         int posValor = localizarInicioValor(json, clave);
         if (posValor == -1 || posValor >= json.length() || json.charAt(posValor) != '"') {
@@ -375,9 +485,6 @@ public class GestorJSON {
         return valorDefecto;
     }
 
-    /**
-     * Extrae el valor entero asociado a una clave JSON (ej. "tamano_bloques": 4).
-     */
     private int extraerEntero(String json, String clave, int valorDefecto) {
         int posValor = localizarInicioValor(json, clave);
         if (posValor == -1 || posValor >= json.length()) {
@@ -397,9 +504,6 @@ public class GestorJSON {
         }
     }
 
-    /**
-     * Extrae la subcadena completa de un objeto JSON {...} asociado a una clave.
-     */
     private String extraerValorObjeto(String json, String clave) {
         int posValor = localizarInicioValor(json, clave);
         if (posValor == -1 || posValor >= json.length() || json.charAt(posValor) != '{') {
@@ -408,9 +512,6 @@ public class GestorJSON {
         return extraerBloqueBalanceado(json, posValor, '{', '}');
     }
 
-    /**
-     * Extrae la subcadena completa de un arreglo JSON [...] asociado a una clave.
-     */
     private String extraerValorArreglo(String json, String clave) {
         int posValor = localizarInicioValor(json, clave);
         if (posValor == -1 || posValor >= json.length() || json.charAt(posValor) != '[') {
@@ -419,17 +520,12 @@ public class GestorJSON {
         return extraerBloqueBalanceado(json, posValor, '[', ']');
     }
 
-    /**
-     * Localiza el indice donde comienza el valor de una clave JSON respetando comillas.
-     */
     private int localizarInicioValor(String json, String clave) {
         String patron = "\"" + clave + "\"";
         int idx = 0;
         while (idx < json.length()) {
             int encontrado = json.indexOf(patron, idx);
-            if (encontrado == -1) {
-                return -1;
-            }
+            if (encontrado == -1) return -1;
             int cursor = encontrado + patron.length();
             while (cursor < json.length() && Character.isWhitespace(json.charAt(cursor))) {
                 cursor++;
@@ -446,9 +542,6 @@ public class GestorJSON {
         return -1;
     }
 
-    /**
-     * Extrae un bloque delimitado por caracteres de apertura/cierre balanceados ({} o []).
-     */
     private String extraerBloqueBalanceado(String texto, int inicio, char apertura, char cierre) {
         int nivel = 0;
         boolean enComillas = false;
@@ -471,10 +564,6 @@ public class GestorJSON {
         return null;
     }
 
-    /**
-     * Divide los objetos JSON de primer nivel dentro de un arreglo "[ {...}, {...} ]"
-     * en un arreglo nativo String[] sin utilizar java.util.
-     */
     private String[] dividirElementosArregloJSON(String arregloJSON) {
         if (arregloJSON == null || arregloJSON.length() < 2) {
             return new String[0];
@@ -510,7 +599,6 @@ public class GestorJSON {
             }
         }
 
-        // Convertir ListaEnlazada a arreglo nativo String[]
         String[] resultado = new String[listaTemporal.getTamaño()];
         for (int i = 0; i < listaTemporal.getTamaño(); i++) {
             resultado[i] = (String) listaTemporal.obtener(i);
@@ -518,13 +606,8 @@ public class GestorJSON {
         return resultado;
     }
 
-    /**
-     * Escapa caracteres especiales para producir cadenas JSON validas.
-     */
     private String escaparJSON(String texto) {
-        if (texto == null) {
-            return "";
-        }
+        if (texto == null) return "";
         StringBuilder sb = new StringBuilder();
         for (int i = 0; i < texto.length(); i++) {
             char c = texto.charAt(i);
@@ -536,17 +619,6 @@ public class GestorJSON {
                 case '\t': sb.append("\\t"); break;
                 default:   sb.append(c); break;
             }
-        }
-        return sb.toString();
-    }
-
-    /**
-     * Genera una cadena con 'cantidad' espacios en blanco para indentacion JSON.
-     */
-    private String generarEspacios(int cantidad) {
-        StringBuilder sb = new StringBuilder();
-        for (int i = 0; i < cantidad; i++) {
-            sb.append(' ');
         }
         return sb.toString();
     }

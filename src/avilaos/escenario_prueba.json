@@ -1,0 +1,81 @@
+{
+  "disco": {
+    "posicion_cabezal": 50
+  },
+  "sistema_archivos": {
+    "tipo": "DIRECTORIO",
+    "nombre": "/",
+    "propietario": "admin",
+    "permiso": "PUBLICO",
+    "hijos": [
+      {
+        "tipo": "DIRECTORIO",
+        "nombre": "sistema",
+        "propietario": "admin",
+        "permiso": "PRIVADO",
+        "hijos": [
+          {
+            "tipo": "ARCHIVO",
+            "nombre": "kernel.bin",
+            "propietario": "admin",
+            "permiso": "PRIVADO",
+            "tamano_bloques": 5,
+            "primer_bloque": 80,
+            "contenido": "Nucleo binario de AvilaOS"
+          }
+        ]
+      },
+      {
+        "tipo": "ARCHIVO",
+        "nombre": "tarea.txt",
+        "propietario": "usuario1",
+        "permiso": "PUBLICO",
+        "tamano_bloques": 4,
+        "primer_bloque": 45,
+        "contenido": "Archivo de prueba para operaciones de lectura y escritura"
+      },
+      {
+        "tipo": "ARCHIVO",
+        "nombre": "secreto.txt",
+        "propietario": "admin",
+        "permiso": "PRIVADO",
+        "tamano_bloques": 3,
+        "primer_bloque": 12,
+        "contenido": "Solo el administrador puede leer este archivo"
+      }
+    ]
+  },
+  "procesos": [
+    {
+      "id": 1,
+      "nombre": "P1_CPU",
+      "prioridad": 1,
+      "tiempo_ejecucion": 5,
+      "paginas": 4,
+      "deadline": 20,
+      "tipo": "CPU_BOUND"
+    },
+    {
+      "id": 2,
+      "nombre": "P2_IO_Leer",
+      "prioridad": 1,
+      "tiempo_ejecucion": 4,
+      "paginas": 4,
+      "deadline": 40,
+      "tipo": "IO_BOUND",
+      "operacion_es": "LEER",
+      "ruta_archivo": "/tarea.txt"
+    },
+    {
+      "id": 3,
+      "nombre": "P3_IO_Sys",
+      "prioridad": 2,
+      "tiempo_ejecucion": 4,
+      "paginas": 4,
+      "deadline": 60,
+      "tipo": "IO_BOUND",
+      "operacion_es": "LEER",
+      "ruta_archivo": "/sistema/kernel.bin"
+    }
+  ]
+}

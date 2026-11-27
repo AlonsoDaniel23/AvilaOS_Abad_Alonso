@@ -243,11 +243,50 @@ public class DiscoSimulado implements IRelojListener {
      */
     private void finalizarSolicitudActual() {
         Proceso p = solicitudEnCurso.getProceso();
-        if (p != null && Computador.getInstancia() != null) {
-            Computador.getInstancia().desbloquearProceso(p);
+        if (p != null) {
+            ejecutarOperacionCRUDEnSistemaArchivos(p);
+            if (Computador.getInstancia() != null) {
+                Computador.getInstancia().desbloquearProceso(p);
+            }
         }
         solicitudEnCurso = null;
         ciclosRestantesServicio = 0;
+    }
+
+    private void ejecutarOperacionCRUDEnSistemaArchivos(Proceso p) {
+        if (p.getOperacionES() == null) {
+            return;
+        }
+        SistemaArchivos fs = SistemaArchivos.getInstancia();
+        String ruta = p.getRutaArchivo();
+
+        switch (p.getOperacionES()) {
+            case CREAR:
+                int idx = ruta.lastIndexOf('/');
+                String rutaPadre = (idx <= 0) ? "/" : ruta.substring(0, idx);
+                String nombreNuevo = (idx >= 0) ? ruta.substring(idx + 1) : ruta;
+                if (p.isEsDirectorioTarget()) {
+                    fs.crearDirectorio(rutaPadre, nombreNuevo, p.getPermisoES());
+                } else {
+                    fs.crearArchivo(rutaPadre, nombreNuevo, p.getBloquesSolicitadosES(),
+                        p.getPermisoES(), p.getContenidoES(), p.getNombre());
+                }
+                break;
+            case ACTUALIZAR:
+                if (p.getNuevoNombreES() != null && !p.getNuevoNombreES().isEmpty()) {
+                    fs.renombrarEntrada(ruta, p.getNuevoNombreES());
+                } else if (p.getContenidoES() != null && !p.getContenidoES().isEmpty()) {
+                    fs.actualizarContenidoArchivo(ruta, p.getContenidoES());
+                }
+                break;
+            case ELIMINAR:
+                fs.eliminarEntrada(ruta);
+                break;
+            case LEER:
+            default:
+                fs.leerArchivo(ruta);
+                break;
+        }
     }
 
     /**
@@ -329,6 +368,16 @@ public class DiscoSimulado implements IRelojListener {
             actual = siguiente;
         }
     }
+    
+    public void asignarColorACadena(int primerBloque, java.awt.Color color) {
+    int actual = primerBloque;
+    int seguridad = 0;
+    while (actual >= 0 && actual < totalBloques && seguridad < totalBloques) {
+        bloques[actual].setColorArchivo(color);
+        actual = bloques[actual].getSiguienteBloque();
+        seguridad++;
+    }
+}
 
     // ==================== GESTION DEL AREA SWAP EN DISCO ====================
 

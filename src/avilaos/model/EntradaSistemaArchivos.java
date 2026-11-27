@@ -131,4 +131,9 @@ public abstract class EntradaSistemaArchivos {
     public void setPadre(Directorio padre) {
         this.padre = padre;
     }
+    
+    @Override
+    public String toString() {
+        return (nombre != null && !nombre.isEmpty()) ? nombre : "/";
+    }
 }

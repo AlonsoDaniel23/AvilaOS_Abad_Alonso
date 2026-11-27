@@ -285,20 +285,37 @@ public class Computador implements IRelojListener {
     }
 
     /**
-     * Cambia la CPU a Modo Kernel (SISTEMA_OPERATIVO) para atender una solicitud de E/S.
+     * Cambia la CPU a Modo Kernel (SISTEMA_OPERATIVO) para atender una solicitud de E/S
+     * y encola la solicitud real en DiscoSimulado.
      */
     private void procesarLlamadaSistemaES(Proceso p, int cicloActual) {
         cpu.activarModoKernel();
 
-        String operacion = (p.getOperacionES() != null) ? p.getOperacionES().name() : "LEER";
-        String ruta = (p.getRutaArchivo() != null && !p.getRutaArchivo().isEmpty()) ? p.getRutaArchivo() : "/sistema";
+        avilaos.enums.TipoOperacionES opEnum = (p.getOperacionES() != null)
+                ? p.getOperacionES() : avilaos.enums.TipoOperacionES.LEER;
+        String ruta = (p.getRutaArchivo() != null && !p.getRutaArchivo().isEmpty())
+                ? p.getRutaArchivo() : "/tarea.txt";
+
+        int bloqueObjetivo = 0;
+        int cantidadBloques = Math.max(1, p.getBloquesSolicitadosES());
+        EntradaSistemaArchivos entrada = SistemaArchivos.getInstancia().buscarPorRuta(ruta);
+        if (entrada != null && !entrada.esDirectorio()) {
+            Archivo arch = (Archivo) entrada;
+            bloqueObjetivo = Math.max(0, arch.getPrimerBloque());
+            cantidadBloques = Math.max(1, arch.getTamanoBloques());
+        }
+
+        SolicitudDisco solicitud = new SolicitudDisco(
+                p, opEnum, ruta, bloqueObjetivo, cantidadBloques, cicloActual);
+        DiscoSimulado.getInstancia().encolarSolicitud(solicitud);
 
         p.setSolicitudDiscoEnviada(true);
-        p.setMotivoBloqueo("E/S Disco (" + operacion + ")");
+        p.setMotivoBloqueo("E/S Disco (" + opEnum.name() + ")");
         p.setEstado(EstadoProceso.BLOQUEADO);
 
         EventLog.getInstancia().registrar("[Ciclo " + cicloActual + "] [KERNEL] Proceso " + p.getNombre()
-                + " solicita E/S (" + operacion + ") sobre '" + ruta + "'. Pasa a BLOQUEADO.");
+                + " solicita E/S (" + opEnum.name() + ") sobre '" + ruta
+                + "' (Bloque #" + bloqueObjetivo + "). Pasa a BLOQUEADO.");
 
         colaBloqueados.encolar(p);
 
@@ -313,19 +330,32 @@ public class Computador implements IRelojListener {
     }
 
     /**
-     * Notifica que un proceso termino su operacion de E/S en el disco para despertarlo.
+     * Notifica que un proceso termino su operacion de E/S en el disco para despertarlo
+     * y extraerlo de la cola de bloqueados sin duplicarlo.
      */
     public void desbloquearProceso(Proceso p) {
-        if (p != null) {
-            p.setOperacionESCompletada(true);
-            p.setMotivoBloqueo("");
-            if (p.getEstado() == EstadoProceso.SUSPENDIDO_BLOQUEADO) {
-                p.setEstado(EstadoProceso.SUSPENDIDO_LISTO);
-                colaSuspendidosListos.encolar(p);
-            } else {
-                p.setEstado(EstadoProceso.LISTO);
-                agregarAListos(p);
+        if (p == null) {
+            return;
+        }
+        p.setOperacionESCompletada(true);
+        p.setMotivoBloqueo("");
+
+        if (p.getEstado() == EstadoProceso.SUSPENDIDO_BLOQUEADO) {
+            p.setEstado(EstadoProceso.SUSPENDIDO_LISTO);
+            colaSuspendidosListos.encolar(p);
+        } else if (p.getEstado() == EstadoProceso.BLOQUEADO) {
+            // Extraerlo de colaBloqueados inmediatamente para evitar que revisarColaBloqueados() lo duplique
+            int tam = colaBloqueados.getTamaño();
+            for (int i = 0; i < tam; i++) {
+                Proceso actual = (Proceso) colaBloqueados.desencolar();
+                if (actual != null && actual.getId() != p.getId()) {
+                    colaBloqueados.encolar(actual);
+                }
             }
+            p.setEstado(EstadoProceso.LISTO);
+            agregarAListos(p);
+            EventLog.getInstancia().registrar("[Ciclo " + RelojGlobal.getInstancia().getCicloActual()
+                    + "] Proceso " + p.getNombre() + " completo su E/S y paso a Cola de Listos.");
         }
     }
 

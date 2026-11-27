@@ -1,6 +1,7 @@
 package avilaos.model;
 
 import avilaos.enums.EstadoProceso;
+import avilaos.enums.PermisoArchivo;
 import avilaos.enums.TipoOperacionES;
 import avilaos.enums.TipoProceso;
 
@@ -9,7 +10,7 @@ import avilaos.enums.TipoProceso;
  * Almacena identidad, jerarquia, estado, tabla de paginas y parametros de E/S.
  * 
  * @author Equipo AvilaOS
- * @version 1.6
+ * @version 1.7
  */
 public class Proceso {
 
@@ -30,6 +31,13 @@ public class Proceso {
     private boolean solicitudDiscoEnviada;
     private boolean operacionESCompletada;
     private EntradaTablaPaginas[] tablaPaginas;
+
+    // Metadatos opcionales para operaciones CRUD de E/S
+    private boolean esDirectorioTarget;
+    private int bloquesSolicitadosES = 1;
+    private String nuevoNombreES = "";
+    private String contenidoES = "";
+    private PermisoArchivo permisoES = PermisoArchivo.PUBLICO;
 
     /**
      * Constructor base para procesos CPU_BOUND por defecto.
@@ -94,7 +102,7 @@ public class Proceso {
         return tiempoCpuConsumido >= tiempoEjecucion;
     }
 
-    // Getters y Setters
+    // Getters y Setters principales
     public int getId() { return id; }
     public int getIdPadre() { return idPadre; }
     public String getNombre() { return nombre; }
@@ -124,6 +132,18 @@ public class Proceso {
     public boolean isOperacionESCompletada() { return operacionESCompletada; }
     public void setOperacionESCompletada(boolean operacionESCompletada) { this.operacionESCompletada = operacionESCompletada; }
     public EntradaTablaPaginas[] getTablaPaginas() { return tablaPaginas; }
+
+    // Getters y Setters para operaciones CRUD de E/S
+    public boolean isEsDirectorioTarget() { return esDirectorioTarget; }
+    public void setEsDirectorioTarget(boolean esDirectorioTarget) { this.esDirectorioTarget = esDirectorioTarget; }
+    public int getBloquesSolicitadosES() { return bloquesSolicitadosES; }
+    public void setBloquesSolicitadosES(int bloquesSolicitadosES) { this.bloquesSolicitadosES = Math.max(1, bloquesSolicitadosES); }
+    public String getNuevoNombreES() { return nuevoNombreES; }
+    public void setNuevoNombreES(String nuevoNombreES) { this.nuevoNombreES = nuevoNombreES; }
+    public String getContenidoES() { return contenidoES; }
+    public void setContenidoES(String contenidoES) { this.contenidoES = contenidoES; }
+    public PermisoArchivo getPermisoES() { return permisoES; }
+    public void setPermisoES(PermisoArchivo permisoES) { this.permisoES = permisoES; }
 
     @Override
     public String toString() {

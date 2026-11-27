@@ -4,59 +4,64 @@
  */
 package avilaos.gui;
 
+import avilaos.enums.TipoOperacionES;
 import avilaos.enums.TipoProceso;
-import avilaos.model.ClusterManager;
 import avilaos.model.Computador;
+import avilaos.model.DiscoSimulado;
 import avilaos.model.Proceso;
-import avilaos.persistence.GestorPersistencia;
+import avilaos.model.SistemaArchivos;
+import avilaos.persistence.GestorJSON;
 import avilaos.services.EventLog;
 import avilaos.services.MetricasService;
-import avilaos.synchronization.BufferCircular;
 
 import javax.swing.*;
 import javax.swing.border.*;
 import java.awt.*;
 import java.awt.event.ActionEvent;
+import java.io.File;
 
 /**
- * Vista 1: Formulario principal de configuracion del cluster, creacion de procesos
- * y declaracion de buffers compartidos (Requerimientos 6 y 7).
+ * Vista 1: Formulario principal de configuracion del computador, disco simulado,
+ * carga obligatoria de los 2 JSON oficiales y creacion manual de procesos.
  * 
  * @author Daniel Alonso
- * @version 2.5
+ * @version 3.1
  */
 public class Vista1Configuracion extends JFrame {
-    
-   // Componentes de Configuración Global
-    private JTextField txtDuracionCiclo;
-    private JTextField txtLatenciaRed;
-    private JComboBox<String> comboNumComputadores;
 
-    // Componentes de Creación de Procesos
+    private JTextField txtDuracionCiclo;
+    private JTextField txtRamKB;
+    private JTextField txtSwapKB;
+    private JTextField txtTotalBloques;
+    private JTextField txtBloquesSwap;
+    private JTextField txtCabezalInicial;
+    private JButton btnAplicarHardware;
+
     private JTextField txtNombreProceso;
     private JComboBox<String> comboTipoProceso;
-    private JTextField txtBufferAsociado;
+    private JComboBox<TipoOperacionES> comboOperacionES;
+    private JTextField txtRutaArchivoProceso;
     private JTextField txtRamProceso;
     private JTextField txtPrioridadProceso;
     private JTextField txtDeadlineProceso;
     private JTextField txtCiclosProceso;
-    private JComboBox<String> comboNodoDestino;
 
-    // Componentes de Creación de Buffers
-    private JTextField txtNombreBuffer;
-    private JTextField txtCapacidadBuffer;
-    private JComboBox<String> comboNodoAnfitrion;
+    private JLabel lblEstadoJSONFS;
+    private JLabel lblEstadoJSONProcesos;
+    private JLabel lblResumenCola;
 
-    // Módulos del backend
-    private ClusterManager clusterManager;
-    private GestorPersistencia gestorPersistencia;
+    private Computador computador;
+    private DiscoSimulado discoSimulado;
+    private SistemaArchivos sistemaArchivos;
+    private GestorJSON gestorJSON;
     private EventLog eventLog;
     private MetricasService metricasService;
 
     private int contadorProcesosId = 1;
-    private boolean ignorarEventoCombo = false; // Bandera para evitar reconfiguración involuntaria al cargar CSV
+    private int procesosCargadosCount = 0;
+    private boolean jsonFSCargado = false;
+    private boolean jsonProcesosCargado = false;
 
-    // Colores del Tema
     private static final Color COLOR_HEADER = new Color(15, 23, 42);
     private static final Color COLOR_BG = new Color(248, 250, 252);
     private static final Color COLOR_CARD_BG = Color.WHITE;
@@ -67,9 +72,9 @@ public class Vista1Configuracion extends JFrame {
     private static final Color COLOR_SECONDARY = new Color(71, 85, 105);
 
     public Vista1Configuracion() {
-        super("ÁvilaOS V2 - Panel de Configuración e Inserción");
+        super("ÁvilaOS - Configuración de Hardware, Disco y Escenarios JSON");
         aplicarLookAndFeel();
-        inicializarModulosBackend(2);
+        inicializarModulosBackend(1024, 512, 200, 40, 50);
         configurarVentana();
         construirInterfaz();
     }
@@ -81,19 +86,23 @@ public class Vista1Configuracion extends JFrame {
         }
     }
 
-    private void inicializarModulosBackend(int numNodos) {
-        this.clusterManager = new ClusterManager(numNodos);
-        for (int i = 1; i <= numNodos; i++) {
-            this.clusterManager.agregarComputador(new Computador(i, "Computador " + i, 1024, 2048));
-        }
-        this.gestorPersistencia = new GestorPersistencia("config_avilaos.csv");
-        this.eventLog = new EventLog(100);
+    private void inicializarModulosBackend(int ramKB, int swapKB, int totalBloques, int bloquesSwap, int cabezalInicial) {
+        this.eventLog = new EventLog(200);
         this.metricasService = new MetricasService();
+        this.discoSimulado = new DiscoSimulado(totalBloques, bloquesSwap, cabezalInicial);
+        this.discoSimulado.setMetricasService(this.metricasService);
+        this.sistemaArchivos = new SistemaArchivos(this.discoSimulado);
+        this.computador = new Computador(1, "ÁvilaOS-PC", ramKB, swapKB);
+        this.gestorJSON = new GestorJSON();
+        this.contadorProcesosId = 1;
+        this.procesosCargadosCount = 0;
+        this.jsonFSCargado = false;
+        this.jsonProcesosCargado = false;
     }
 
     private void configurarVentana() {
         this.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
-        this.setSize(1050, 720);
+        this.setSize(1120, 740);
         this.setLocationRelativeTo(null);
         this.getContentPane().setBackground(COLOR_BG);
         this.setLayout(new BorderLayout(0, 0));
@@ -104,11 +113,11 @@ public class Vista1Configuracion extends JFrame {
         panelHeader.setBackground(COLOR_HEADER);
         panelHeader.setBorder(BorderFactory.createEmptyBorder(18, 25, 18, 25));
 
-        JLabel lblTitulo = new JLabel("ÁVILAOS: SIMULADOR DE SISTEMA OPERATIVO DISTRIBUIDO");
+        JLabel lblTitulo = new JLabel("ÁVILAOS: SIMULADOR DE SISTEMA OPERATIVO Y GESTIÓN DE ARCHIVOS");
         lblTitulo.setForeground(Color.WHITE);
         lblTitulo.setFont(new Font("Segoe UI", Font.BOLD, 18));
 
-        JLabel lblSubtitulo = new JLabel("Módulo de Configuración de Clúster, Inserción de Procesos y Buffers");
+        JLabel lblSubtitulo = new JLabel("Configuración de Memoria, Disco Simulado (SD), Importación JSON e Inserción de Procesos");
         lblSubtitulo.setForeground(new Color(148, 163, 184));
         lblSubtitulo.setFont(new Font("Segoe UI", Font.PLAIN, 12));
 
@@ -120,9 +129,9 @@ public class Vista1Configuracion extends JFrame {
         panelCuerpo.setBackground(COLOR_BG);
         panelCuerpo.setBorder(BorderFactory.createEmptyBorder(20, 20, 20, 20));
 
-        panelCuerpo.add(crearPanelConfiguracionGlobal());
+        panelCuerpo.add(crearPanelHardwareDisco());
         panelCuerpo.add(crearPanelCreacionProcesos());
-        panelCuerpo.add(crearPanelCreacionBuffers());
+        panelCuerpo.add(crearPanelPersistenciaJSON());
 
         this.add(panelCuerpo, BorderLayout.CENTER);
 
@@ -130,20 +139,15 @@ public class Vista1Configuracion extends JFrame {
         panelInferior.setBackground(COLOR_BG);
         panelInferior.setBorder(BorderFactory.createMatteBorder(1, 0, 0, 0, COLOR_BORDER));
 
-        JButton btnGuardarConfig = crearBotonFlat("Guardar CSV", COLOR_SECONDARY, Color.WHITE);
-        JButton btnCargarConfig = crearBotonFlat("Cargar CSV", COLOR_SECONDARY, Color.WHITE);
+        JButton btnExportarJSON = crearBotonFlat("Exportar FS a JSON", COLOR_SECONDARY, Color.WHITE);
         JButton btnIniciarSimulacion = crearBotonFlat("Iniciar Simulación  →", COLOR_SUCCESS, Color.WHITE);
 
-        btnGuardarConfig.addActionListener(this::accionGuardarCSV);
-        btnCargarConfig.addActionListener(this::accionCargarCSV);
+        btnExportarJSON.addActionListener(this::accionExportarJSON);
         btnIniciarSimulacion.addActionListener(this::accionIniciarSimulacion);
 
-        panelInferior.add(btnGuardarConfig);
-        panelInferior.add(btnCargarConfig);
+        panelInferior.add(btnExportarJSON);
         panelInferior.add(btnIniciarSimulacion);
         this.add(panelInferior, BorderLayout.SOUTH);
-
-        actualizarCantidadNodos();
     }
 
     private JPanel crearPanelTarjeta() {
@@ -170,128 +174,141 @@ public class Vista1Configuracion extends JFrame {
         gbc.gridwidth = 1;
     }
 
-    private JPanel crearPanelConfiguracionGlobal() {
+    private JPanel crearPanelHardwareDisco() {
         JPanel panel = crearPanelTarjeta();
         GridBagConstraints gbc = new GridBagConstraints();
 
-        agregarTituloTarjeta(panel, "1. Parámetros del Clúster", gbc);
+        agregarTituloTarjeta(panel, "1. Memoria y Disco Simulado", gbc);
 
-        txtDuracionCiclo = crearCampoTexto("1000");
-        txtLatenciaRed = crearCampoTexto("2");
-        comboNumComputadores = new JComboBox<>(new String[]{"2 Computadores", "3 Computadores", "4 Computadores"});
-        estilitarComboBox(comboNumComputadores);
+        txtDuracionCiclo = crearCampoTexto("300");
+        txtRamKB = crearCampoTexto("1024");
+        txtSwapKB = crearCampoTexto("512");
+        txtTotalBloques = crearCampoTexto("200");
+        txtBloquesSwap = crearCampoTexto("40");
+        txtCabezalInicial = crearCampoTexto("50");
 
-        comboNumComputadores.addActionListener(e -> actualizarCantidadNodos());
+        btnAplicarHardware = crearBotonFlat("Aplicar Parámetros Hardware", COLOR_PRIMARY, Color.WHITE);
+        btnAplicarHardware.addActionListener(this::accionAplicarHardware);
 
         agregarFilaFormulario(panel, "Duración Ciclo (ms):", txtDuracionCiclo, gbc, 1);
-        agregarFilaFormulario(panel, "Latencia Red (ciclos):", txtLatenciaRed, gbc, 2);
-        agregarFilaFormulario(panel, "Cantidad de Nodos:", comboNumComputadores, gbc, 3);
+        agregarFilaFormulario(panel, "Memoria RAM (KB):", txtRamKB, gbc, 2);
+        agregarFilaFormulario(panel, "Área Swap RAM (KB):", txtSwapKB, gbc, 3);
+        agregarFilaFormulario(panel, "Total Bloques Disco:", txtTotalBloques, gbc, 4);
+        agregarFilaFormulario(panel, "Bloques Swap Disco:", txtBloquesSwap, gbc, 5);
+        agregarFilaFormulario(panel, "Cabezal Inicial:", txtCabezalInicial, gbc, 6);
 
-        gbc.gridx = 0; gbc.gridy = 4; gbc.weighty = 1.0;
+        gbc.gridx = 0;
+        gbc.gridy = 7;
+        gbc.gridwidth = 2;
+        gbc.insets = new Insets(15, 0, 0, 0);
+        panel.add(btnAplicarHardware, gbc);
+
+        gbc.gridx = 0;
+        gbc.gridy = 8;
+        gbc.weighty = 1.0;
         panel.add(Box.createGlue(), gbc);
 
         return panel;
-    }
-
-    private void actualizarCantidadNodos() {
-        if (comboNumComputadores == null || ignorarEventoCombo) return;
-
-        String seleccion = (String) comboNumComputadores.getSelectedItem();
-        int numNodos = 2;
-        if (seleccion != null) {
-            if (seleccion.contains("3")) numNodos = 3;
-            else if (seleccion.contains("4")) numNodos = 4;
-        }
-
-        this.clusterManager = new ClusterManager(numNodos);
-        for (int i = 1; i <= numNodos; i++) {
-            this.clusterManager.agregarComputador(new Computador(i, "Computador " + i, 1024, 2048));
-        }
-
-        sincronizarCombosNodos(numNodos);
-
-        if (eventLog != null) {
-            eventLog.registrar(0, "Clúster reconfigurado dinámicamente a " + numNodos + " nodos.");
-        }
-    }
-
-    private void sincronizarCombosNodos(int numNodos) {
-        if (comboNodoDestino != null) {
-            comboNodoDestino.removeAllItems();
-            comboNodoDestino.addItem("Asignación Automática");
-            for (int i = 1; i <= numNodos; i++) {
-                comboNodoDestino.addItem("Nodo " + i);
-            }
-        }
-
-        if (comboNodoAnfitrion != null) {
-            comboNodoAnfitrion.removeAllItems();
-            for (int i = 1; i <= numNodos; i++) {
-                comboNodoAnfitrion.addItem("Nodo " + i);
-            }
-        }
     }
 
     private JPanel crearPanelCreacionProcesos() {
         JPanel panel = crearPanelTarjeta();
         GridBagConstraints gbc = new GridBagConstraints();
 
-        agregarTituloTarjeta(panel, "2. Crear Proceso", gbc);
+        agregarTituloTarjeta(panel, "2. Crear Proceso Manual", gbc);
 
         txtNombreProceso = crearCampoTexto("P1");
-        comboTipoProceso = new JComboBox<>(new String[]{"CPU Bound", "I/O Bound", "Productor", "Consumidor"});
+        comboTipoProceso = new JComboBox<>(new String[]{"CPU Bound", "I/O Bound"});
         estilitarComboBox(comboTipoProceso);
-        
-        txtBufferAsociado = crearCampoTexto("B1");
-        txtRamProceso = crearCampoTexto("128");
-        txtPrioridadProceso = crearCampoTexto("1");
-        txtDeadlineProceso = crearCampoTexto("20");
-        txtCiclosProceso = crearCampoTexto("10");
-        comboNodoDestino = new JComboBox<>(new String[]{"Asignación Automática", "Nodo 1", "Nodo 2"});
-        estilitarComboBox(comboNodoDestino);
 
-        JButton btnAgregar = crearBotonFlat("  + Agregar Proceso  ", COLOR_PRIMARY, Color.WHITE);
+        comboOperacionES = new JComboBox<>(TipoOperacionES.values());
+        estilitarComboBox(comboOperacionES);
+        comboOperacionES.setEnabled(false);
+
+        txtRutaArchivoProceso = crearCampoTexto("/documento.txt");
+        txtRutaArchivoProceso.setEnabled(false);
+
+        comboTipoProceso.addActionListener(e -> {
+            boolean esIO = "I/O Bound".equalsIgnoreCase((String) comboTipoProceso.getSelectedItem());
+            comboOperacionES.setEnabled(esIO);
+            txtRutaArchivoProceso.setEnabled(esIO);
+        });
+
+        txtRamProceso = crearCampoTexto("64");
+        txtPrioridadProceso = crearCampoTexto("1");
+        txtDeadlineProceso = crearCampoTexto("25");
+        txtCiclosProceso = crearCampoTexto("8");
+
+        JButton btnAgregar = crearBotonFlat("  + Encolar Proceso  ", COLOR_PRIMARY, Color.WHITE);
         btnAgregar.addActionListener(this::accionAgregarProceso);
 
         agregarFilaFormulario(panel, "Nombre Proceso:", txtNombreProceso, gbc, 1);
-        agregarFilaFormulario(panel, "Tipo:", comboTipoProceso, gbc, 2);
-        agregarFilaFormulario(panel, "Buffer Asociado:", txtBufferAsociado, gbc, 3);
-        agregarFilaFormulario(panel, "RAM (KB):", txtRamProceso, gbc, 4);
-        agregarFilaFormulario(panel, "Prioridad (1-5):", txtPrioridadProceso, gbc, 5);
-        agregarFilaFormulario(panel, "Deadline (Ciclos):", txtDeadlineProceso, gbc, 6);
-        agregarFilaFormulario(panel, "Ciclos Requeridos:", txtCiclosProceso, gbc, 7);
-        agregarFilaFormulario(panel, "Nodo Destino:", comboNodoDestino, gbc, 8);
+        agregarFilaFormulario(panel, "Tipo Proceso:", comboTipoProceso, gbc, 2);
+        agregarFilaFormulario(panel, "Operación E/S:", comboOperacionES, gbc, 3);
+        agregarFilaFormulario(panel, "Ruta Archivo:", txtRutaArchivoProceso, gbc, 4);
+        agregarFilaFormulario(panel, "RAM (KB):", txtRamProceso, gbc, 5);
+        agregarFilaFormulario(panel, "Prioridad (1-5):", txtPrioridadProceso, gbc, 6);
+        agregarFilaFormulario(panel, "Deadline (Ciclos):", txtDeadlineProceso, gbc, 7);
+        agregarFilaFormulario(panel, "Ciclos CPU:", txtCiclosProceso, gbc, 8);
 
-        gbc.gridx = 0; gbc.gridy = 9; gbc.gridwidth = 2;
+        gbc.gridx = 0;
+        gbc.gridy = 9;
+        gbc.gridwidth = 2;
         gbc.insets = new Insets(15, 0, 0, 0);
         panel.add(btnAgregar, gbc);
 
         return panel;
     }
 
-    private JPanel crearPanelCreacionBuffers() {
+    private JPanel crearPanelPersistenciaJSON() {
         JPanel panel = crearPanelTarjeta();
         GridBagConstraints gbc = new GridBagConstraints();
 
-        agregarTituloTarjeta(panel, "3. Buffer Compartido", gbc);
+        agregarTituloTarjeta(panel, "3. Escenarios JSON Obligatorios", gbc);
 
-        txtNombreBuffer = crearCampoTexto("B1");
-        txtCapacidadBuffer = crearCampoTexto("1");
-        comboNodoAnfitrion = new JComboBox<>(new String[]{"Nodo 1", "Nodo 2"});
-        estilitarComboBox(comboNodoAnfitrion);
+        JButton btnCargarJSONFS = crearBotonFlat("📂 1. Cargar JSON Sistema de Archivos", COLOR_PRIMARY, Color.WHITE);
+        btnCargarJSONFS.addActionListener(e -> accionCargarArchivoJSON(true));
 
-        JButton btnAgregar = crearBotonFlat("  + Agregar Buffer  ", COLOR_PRIMARY, Color.WHITE);
-        btnAgregar.addActionListener(this::accionAgregarBuffer);
+        lblEstadoJSONFS = new JLabel("Pendiente: JSON de Disco y Archivos");
+        lblEstadoJSONFS.setFont(new Font("Segoe UI", Font.ITALIC, 11));
+        lblEstadoJSONFS.setForeground(new Color(239, 68, 68));
 
-        agregarFilaFormulario(panel, "Nombre Buffer:", txtNombreBuffer, gbc, 1);
-        agregarFilaFormulario(panel, "Capacidad (Elem):", txtCapacidadBuffer, gbc, 2);
-        agregarFilaFormulario(panel, "Nodo Anfitrión:", comboNodoAnfitrion, gbc, 3);
+        JButton btnCargarJSONProcesos = crearBotonFlat("📂 2. Cargar JSON Procesos y Config", COLOR_PRIMARY, Color.WHITE);
+        btnCargarJSONProcesos.addActionListener(e -> accionCargarArchivoJSON(false));
 
-        gbc.gridx = 0; gbc.gridy = 4; gbc.gridwidth = 2;
-        gbc.insets = new Insets(15, 0, 0, 0);
-        panel.add(btnAgregar, gbc);
+        lblEstadoJSONProcesos = new JLabel("Pendiente: JSON de Procesos");
+        lblEstadoJSONProcesos.setFont(new Font("Segoe UI", Font.ITALIC, 11));
+        lblEstadoJSONProcesos.setForeground(new Color(239, 68, 68));
 
-        gbc.gridx = 0; gbc.gridy = 5; gbc.weighty = 1.0;
+        lblResumenCola = new JLabel("Procesos listos/nuevos en cola: 0");
+        lblResumenCola.setFont(new Font("Segoe UI", Font.BOLD, 12));
+        lblResumenCola.setForeground(COLOR_SUCCESS);
+
+        gbc.gridx = 0;
+        gbc.gridy = 1;
+        gbc.gridwidth = 2;
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        gbc.insets = new Insets(5, 0, 4, 0);
+        panel.add(btnCargarJSONFS, gbc);
+
+        gbc.gridy = 2;
+        gbc.insets = new Insets(0, 0, 15, 0);
+        panel.add(lblEstadoJSONFS, gbc);
+
+        gbc.gridy = 3;
+        gbc.insets = new Insets(5, 0, 4, 0);
+        panel.add(btnCargarJSONProcesos, gbc);
+
+        gbc.gridy = 4;
+        gbc.insets = new Insets(0, 0, 18, 0);
+        panel.add(lblEstadoJSONProcesos, gbc);
+
+        gbc.gridy = 5;
+        gbc.insets = new Insets(8, 0, 8, 0);
+        panel.add(lblResumenCola, gbc);
+
+        gbc.gridy = 6;
+        gbc.weighty = 1.0;
         panel.add(Box.createGlue(), gbc);
 
         return panel;
@@ -300,9 +317,9 @@ public class Vista1Configuracion extends JFrame {
     private void agregarFilaFormulario(JPanel panel, String etiqueta, JComponent comp, GridBagConstraints gbc, int fila) {
         gbc.gridwidth = 1;
         gbc.gridy = fila;
-        gbc.weightx = 0.4;
+        gbc.weightx = 0.45;
         gbc.fill = GridBagConstraints.HORIZONTAL;
-        gbc.insets = new Insets(3, 0, 3, 10);
+        gbc.insets = new Insets(4, 0, 4, 10);
 
         JLabel lbl = new JLabel(etiqueta);
         lbl.setFont(new Font("Segoe UI", Font.PLAIN, 12));
@@ -311,8 +328,8 @@ public class Vista1Configuracion extends JFrame {
         panel.add(lbl, gbc);
 
         gbc.gridx = 1;
-        gbc.weightx = 0.6;
-        gbc.insets = new Insets(3, 0, 3, 0);
+        gbc.weightx = 0.55;
+        gbc.insets = new Insets(4, 0, 4, 0);
         panel.add(comp, gbc);
     }
 
@@ -364,8 +381,34 @@ public class Vista1Configuracion extends JFrame {
         return btn;
     }
 
+    private void accionAplicarHardware(ActionEvent e) {
+        try {
+            int ramKB = Integer.parseInt(txtRamKB.getText().trim());
+            int swapKB = Integer.parseInt(txtSwapKB.getText().trim());
+            int totalBloques = Integer.parseInt(txtTotalBloques.getText().trim());
+            int bloquesSwap = Integer.parseInt(txtBloquesSwap.getText().trim());
+            int cabezalInicial = Integer.parseInt(txtCabezalInicial.getText().trim());
+
+            if (ramKB < 16 || swapKB < 16 || totalBloques < 20 || bloquesSwap < 0 || bloquesSwap >= totalBloques) {
+                JOptionPane.showMessageDialog(this, "Verifica que RAM/Swap >= 16 KB y Bloques Swap < Total Bloques.", "Validación", JOptionPane.WARNING_MESSAGE);
+                return;
+            }
+
+            inicializarModulosBackend(ramKB, swapKB, totalBloques, bloquesSwap, cabezalInicial);
+            lblEstadoJSONFS.setText("Pendiente: JSON de Disco y Archivos");
+            lblEstadoJSONFS.setForeground(new Color(239, 68, 68));
+            lblEstadoJSONProcesos.setText("Pendiente: JSON de Procesos");
+            lblEstadoJSONProcesos.setForeground(new Color(239, 68, 68));
+            lblResumenCola.setText("Procesos listos/nuevos en cola: 0");
+
+            eventLog.registrar(0, "Hardware configurado: RAM=" + ramKB + "KB, Disco=" + totalBloques + " bloques (Swap=" + bloquesSwap + "), Cabezal=" + cabezalInicial);
+            JOptionPane.showMessageDialog(this, "Parámetros de hardware aplicados correctamente.", "Hardware Listo", JOptionPane.INFORMATION_MESSAGE);
+        } catch (NumberFormatException ex) {
+            JOptionPane.showMessageDialog(this, "Ingrese números enteros válidos en los parámetros de hardware.", "Error", JOptionPane.ERROR_MESSAGE);
+        }
+    }
+
     private void accionAgregarProceso(ActionEvent e) {
-        if (e == null) return;
         try {
             String nombre = txtNombreProceso.getText().trim();
             if (nombre.isEmpty()) {
@@ -378,165 +421,180 @@ public class Vista1Configuracion extends JFrame {
             int deadline = Integer.parseInt(txtDeadlineProceso.getText().trim());
             int ciclos = Integer.parseInt(txtCiclosProceso.getText().trim());
 
-            if (ram <= 0 || prioridad <= 0 || deadline <= 0 || ciclos <= 0) {
-                JOptionPane.showMessageDialog(this, "Los valores numéricos deben ser mayores a cero.", "Validación", JOptionPane.ERROR_MESSAGE);
+            if (ram <= 0 || prioridad <= 0 || deadline < 0 || ciclos <= 0) {
+                JOptionPane.showMessageDialog(this, "Los valores numéricos deben ser positivos.", "Validación", JOptionPane.ERROR_MESSAGE);
                 return;
             }
 
-            String tipoSeleccionado = comboTipoProceso.getSelectedItem().toString();
-            TipoProceso tipoEnum = TipoProceso.CPU_BOUND;
-            if (tipoSeleccionado.equalsIgnoreCase("I/O Bound")) {
-                tipoEnum = TipoProceso.IO_BOUND;
-            } else if (tipoSeleccionado.equalsIgnoreCase("Productor")) {
-                tipoEnum = TipoProceso.PRODUCTOR;
-            } else if (tipoSeleccionado.equalsIgnoreCase("Consumidor")) {
-                tipoEnum = TipoProceso.CONSUMIDOR;
-            }
-
-            String nombreBuffer = txtBufferAsociado.getText().trim();
-            if (nombreBuffer.isEmpty()) {
-                nombreBuffer = "B1";
-            }
+            boolean esIO = "I/O Bound".equalsIgnoreCase((String) comboTipoProceso.getSelectedItem());
+            TipoProceso tipoEnum = esIO ? TipoProceso.IO_BOUND : TipoProceso.CPU_BOUND;
+            TipoOperacionES opES = esIO ? (TipoOperacionES) comboOperacionES.getSelectedItem() : null;
+            String ruta = esIO ? txtRutaArchivoProceso.getText().trim() : "";
 
             int totalPaginas = Math.max(1, ram / 4);
-
             Proceso nuevoProceso = new Proceso(
-                contadorProcesosId++, 
-                0, 
-                nombre, 
-                prioridad, 
-                ciclos, 
-                totalPaginas, 
-                tipoEnum, 
-                nombreBuffer
+                    contadorProcesosId++,
+                    0,
+                    nombre,
+                    prioridad,
+                    ciclos,
+                    totalPaginas,
+                    tipoEnum,
+                    opES,
+                    ruta
             );
             nuevoProceso.setDeadline(deadline);
 
-            String dest = (String) comboNodoDestino.getSelectedItem();
-            Computador nodoDestino = null;
+            computador.encolarProceso(nuevoProceso);
+            procesosCargadosCount++;
+            lblResumenCola.setText("Procesos listos/nuevos en cola: " + procesosCargadosCount);
 
-            if (dest != null && dest.startsWith("Nodo ")) {
-                try {
-                    int idNodo = Integer.parseInt(dest.replace("Nodo ", "").trim());
-                    nodoDestino = clusterManager.buscarPorId(idNodo);
-                } catch (Exception ex) {
-                    nodoDestino = clusterManager.obtenerNodoMenosCargado();
-                }
-            } else {
-                nodoDestino = clusterManager.obtenerNodoMenosCargado();
-            }
-
-            if (nodoDestino != null) {
-                nodoDestino.encolarProceso(nuevoProceso);
-                eventLog.registrar(0, "Proceso " + nombre + " [" + tipoEnum + "] asignado a " + nodoDestino.getNombre() + " (Buffer: " + nombreBuffer + ")");
-                JOptionPane.showMessageDialog(this, "Proceso '" + nombre + "' (" + tipoEnum + ") asignado a " + nodoDestino.getNombre() + " con éxito.", "Proceso Creado", JOptionPane.INFORMATION_MESSAGE);
-            } else {
-                JOptionPane.showMessageDialog(this, "No hay nodos disponibles para asignar el proceso.", "Error", JOptionPane.ERROR_MESSAGE);
-            }
-
+            eventLog.registrar(0, "Proceso " + nombre + " [" + tipoEnum + "] agregado al computador.");
             txtNombreProceso.setText("P" + contadorProcesosId);
+            JOptionPane.showMessageDialog(this, "Proceso '" + nombre + "' agregado a la cola con éxito.", "Proceso Creado", JOptionPane.INFORMATION_MESSAGE);
 
         } catch (NumberFormatException ex) {
             JOptionPane.showMessageDialog(this, "Ingrese números enteros válidos.", "Error de Entrada", JOptionPane.ERROR_MESSAGE);
         }
     }
 
-    private void accionAgregarBuffer(ActionEvent e) {
-        if (e == null) return;
-        try {
-            String nombre = txtNombreBuffer.getText().trim();
-            int capacidad = Integer.parseInt(txtCapacidadBuffer.getText().trim());
-
-            if (nombre.isEmpty() || capacidad <= 0) {
-                JOptionPane.showMessageDialog(this, "Ingrese datos válidos para el buffer.", "Validación", JOptionPane.WARNING_MESSAGE);
-                return;
-            }
-
-            String destAnfitrion = (String) comboNodoAnfitrion.getSelectedItem();
-            int idAnfitrion = 1;
-            if (destAnfitrion != null && destAnfitrion.startsWith("Nodo ")) {
-                idAnfitrion = Integer.parseInt(destAnfitrion.replace("Nodo ", "").trim());
-            }
-
-            BufferCircular nuevoBuffer = new BufferCircular(nombre, capacidad, idAnfitrion, metricasService);
-            clusterManager.registrarBuffer(nuevoBuffer);
-
-            eventLog.registrar(0, "Buffer " + nombre + " (Capacidad: " + capacidad + ") creado en Nodo " + idAnfitrion);
-            JOptionPane.showMessageDialog(this, "Buffer '" + nombre + "' asignado al Nodo " + idAnfitrion + " con éxito.", "Buffer Creado", JOptionPane.INFORMATION_MESSAGE);
-
-        } catch (NumberFormatException ex) {
-            JOptionPane.showMessageDialog(this, "La capacidad debe ser un número entero válido.", "Error de Entrada", JOptionPane.ERROR_MESSAGE);
+    private void accionCargarArchivoJSON(boolean esDiscoYArchivos) {
+        JFileChooser chooser = new JFileChooser(new File("."));
+        chooser.setDialogTitle(esDiscoYArchivos
+                ? "Seleccionar JSON de Disco y Sistema de Archivos"
+                : "Seleccionar JSON de Procesos");
+        if (chooser.showOpenDialog(this) != JFileChooser.APPROVE_OPTION) {
+            return;
         }
-    }
 
-    private void accionGuardarCSV(ActionEvent e) {
-        if (e == null) return;
-        try {
-            int duracion = Integer.parseInt(txtDuracionCiclo.getText().trim());
-            int latencia = Integer.parseInt(txtLatenciaRed.getText().trim());
-            
-            clusterManager.setLatenciaRed(latencia);
-            
-            boolean exito = gestorPersistencia.guardarConfiguracion(duracion, latencia, clusterManager);
-            if (exito) {
-                JOptionPane.showMessageDialog(this, "Configuración exportada a 'config_avilaos.csv'.", "Persistencia CSV", JOptionPane.INFORMATION_MESSAGE);
-            }
-        } catch (NumberFormatException ex) {
-            JOptionPane.showMessageDialog(this, "Verifique la duración de ciclo y latencia de red.", "Error de Entrada", JOptionPane.ERROR_MESSAGE);
+        File archivo = chooser.getSelectedFile();
+        // Primera pasada solo para inspeccionar el esquema del archivo seleccionado
+        GestorJSON.ResultadoCargaJSON meta = gestorJSON.analizarYCargarJSON(
+                archivo.getAbsolutePath(), null, null, null);
+
+        if (!meta.exito) {
+            JOptionPane.showMessageDialog(this,
+                    "No se pudo leer o parsear el archivo JSON seleccionado.",
+                    "Error JSON", JOptionPane.ERROR_MESSAGE);
+            return;
         }
-    }
 
-    private void accionCargarCSV(ActionEvent e) {
-        if (e == null) return;
-        ClusterManager cargado = gestorPersistencia.cargarConfiguracionCluster(4);
-        if (cargado != null) {
-            this.clusterManager = cargado;
-            int numNodos = cargado.getCantidadActual();
+        // Validacion cruzada estricta por tipo de JSON
+        if (esDiscoYArchivos && !meta.contieneFS) {
+            JOptionPane.showMessageDialog(this,
+                    "Archivo incorrecto: este JSON no contiene la estructura del Sistema de Archivos ('fileSystem' / 'diskConfig').\n"
+                    + "Seleccione el JSON de Disco y Sistema de Archivos.",
+                    "JSON Inválido para Sistema de Archivos", JOptionPane.ERROR_MESSAGE);
+            return;
+        }
 
-            // Bloquear temporalmente el evento del combo box para que no reinicie el clúster
-            ignorarEventoCombo = true;
-            if (comboNumComputadores != null) {
-                comboNumComputadores.setSelectedItem(numNodos + " Computadores");
+        if (!esDiscoYArchivos && !meta.contieneProcesos) {
+            JOptionPane.showMessageDialog(this,
+                    "Archivo incorrecto: este JSON no contiene la lista de Procesos ('processes').\n"
+                    + "Seleccione el JSON de Procesos y Configuración.",
+                    "JSON Inválido para Procesos", JOptionPane.ERROR_MESSAGE);
+            return;
+        }
+
+        if (esDiscoYArchivos) {
+            int totalBloques = (meta.totalBlocks > 0)
+                    ? meta.totalBlocks
+                    : Integer.parseInt(txtTotalBloques.getText().trim());
+            int bloquesSwap = Integer.parseInt(txtBloquesSwap.getText().trim());
+            int cabezal = (meta.initialHead >= 0)
+                    ? meta.initialHead
+                    : Integer.parseInt(txtCabezalInicial.getText().trim());
+
+            if (bloquesSwap > 0 && totalBloques - bloquesSwap < 180) {
+                bloquesSwap = Math.max(0, totalBloques - 200);
             }
-            sincronizarCombosNodos(numNodos);
-            ignorarEventoCombo = false;
 
-            if (eventLog != null) {
-                eventLog.registrar(0, "Configuración cargada exitosamente desde CSV con " + numNodos + " nodos.");
-            }
+            txtTotalBloques.setText(String.valueOf(totalBloques));
+            txtBloquesSwap.setText(String.valueOf(bloquesSwap));
+            txtCabezalInicial.setText(String.valueOf(cabezal));
 
-            JOptionPane.showMessageDialog(this, "Configuración cargada desde CSV. Nodos activos: " + numNodos, "Persistencia CSV", JOptionPane.INFORMATION_MESSAGE);
+            this.discoSimulado = new DiscoSimulado(totalBloques, bloquesSwap, cabezal);
+            this.discoSimulado.setMetricasService(this.metricasService);
+            this.sistemaArchivos = new SistemaArchivos(this.discoSimulado);
         } else {
-            JOptionPane.showMessageDialog(this, "No se encontró el archivo 'config_avilaos.csv'.", "Aviso", JOptionPane.WARNING_MESSAGE);
+            if (meta.cycleDurationMs > 0) {
+                txtDuracionCiclo.setText(String.valueOf(meta.cycleDurationMs));
+            }
+            if (meta.ramCapacity > 0) {
+                txtRamKB.setText(String.valueOf(meta.ramCapacity));
+                int swapKB = Integer.parseInt(txtSwapKB.getText().trim());
+                this.computador = new Computador(1, "ÁvilaOS-PC", meta.ramCapacity, swapKB);
+                this.procesosCargadosCount = 0;
+            }
+        }
+
+        GestorJSON.ResultadoCargaJSON cargado = gestorJSON.analizarYCargarJSON(
+                archivo.getAbsolutePath(), discoSimulado, sistemaArchivos, computador);
+
+        int cant = cargado.procesosCargados.getTamaño();
+        procesosCargadosCount += cant;
+        contadorProcesosId += cant;
+        lblResumenCola.setText("Procesos listos/nuevos en cola: " + procesosCargadosCount);
+
+        if (esDiscoYArchivos) {
+            jsonFSCargado = true;
+            lblEstadoJSONFS.setText("✔ FS cargado: " + archivo.getName()
+                    + " (Cabezal: " + discoSimulado.getPosicionCabezal() + ")");
+            lblEstadoJSONFS.setForeground(COLOR_SUCCESS);
+        } else {
+            jsonProcesosCargado = true;
+            lblEstadoJSONProcesos.setText("✔ Procesos cargados: " + archivo.getName()
+                    + " (+" + cant + " proc.)");
+            lblEstadoJSONProcesos.setForeground(COLOR_SUCCESS);
+        }
+
+        JOptionPane.showMessageDialog(this,
+                "Archivo '" + archivo.getName() + "' importado correctamente.",
+                "Importación JSON", JOptionPane.INFORMATION_MESSAGE);
+    }
+
+    private void accionExportarJSON(ActionEvent e) {
+        JFileChooser chooser = new JFileChooser(new File("."));
+        chooser.setDialogTitle("Guardar estado actual del Sistema de Archivos y Disco");
+        chooser.setSelectedFile(new File("estado_avilaos.json"));
+        if (chooser.showSaveDialog(this) == JFileChooser.APPROVE_OPTION) {
+            boolean ok = gestorJSON.exportarSistemaArchivosJSON(chooser.getSelectedFile().getAbsolutePath(), discoSimulado, sistemaArchivos);
+            if (ok) {
+                JOptionPane.showMessageDialog(this, "Estado exportado a JSON correctamente.", "Exportación JSON", JOptionPane.INFORMATION_MESSAGE);
+            } else {
+                JOptionPane.showMessageDialog(this, "Error al exportar el archivo JSON.", "Error", JOptionPane.ERROR_MESSAGE);
+            }
         }
     }
 
     private void accionIniciarSimulacion(ActionEvent e) {
-        if (e == null) return;
+        if (!jsonFSCargado || !jsonProcesosCargado) {
+            JOptionPane.showMessageDialog(this,
+                    "Debe cargar ambos archivos JSON (Sistema de Archivos y Procesos) antes de iniciar la simulación.",
+                    "Archivos JSON Requeridos", JOptionPane.WARNING_MESSAGE);
+            return;
+        }
 
+        int duracionMs = 300;
         try {
-            int latencia = Integer.parseInt(txtLatenciaRed.getText().trim());
-            clusterManager.setLatenciaRed(latencia);
-        } catch (NumberFormatException ignored) {}
+            duracionMs = Math.max(100, Integer.parseInt(txtDuracionCiclo.getText().trim()));
+        } catch (NumberFormatException ignored) {
+        }
 
-        eventLog.registrar(0, "Configuración completada. Transicionando a la Vista de Monitoreo.");
-
-        Vista2Monitoreo vista2 = new Vista2Monitoreo(this.clusterManager, this.eventLog, this.metricasService);
+        eventLog.registrar(0, "Iniciando monitoreo de simulación en tiempo real (Ciclo = " + duracionMs + " ms).");
+        Vista2Monitoreo vista2 = new Vista2Monitoreo(
+                this.computador,
+                this.discoSimulado,
+                this.sistemaArchivos,
+                this.eventLog,
+                this.metricasService,
+                duracionMs
+        );
         vista2.setVisible(true);
-
         this.dispose();
     }
 
-    // Getters
-    public ClusterManager getClusterManager() { return clusterManager; }
-    public GestorPersistencia getGestorPersistencia() { return gestorPersistencia; }
-    public EventLog getEventLog() { return eventLog; }
-    public MetricasService getMetricasService() { return metricasService; }
-
     public static void main(String[] args) {
-        SwingUtilities.invokeLater(() -> {
-            Vista1Configuracion vista = new Vista1Configuracion();
-            vista.setVisible(true);
-        });
+        SwingUtilities.invokeLater(() -> new Vista1Configuracion().setVisible(true));
     }
 }
